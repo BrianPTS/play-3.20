@@ -791,7 +791,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
       // Get event data upfront - always fresh, no caching
       const event = await Event.findOne({ Event_ID: eventId })
         .select(
-          "Skip_Scraping priceIncreasePercentage inHandDate mapping_id Available_Seats metadata Event_Name Venue Event_DateTime"
+          "Skip_Scraping priceIncreasePercentage inHandDate mapping_id Available_Seats metadata Event_Name Venue Event_DateTime dynamicPricingEnabled calculatedMarkup"
         ) // Added Skip_Scraping for stop-check, Event_Name, Venue, Event_DateTime
         .session(session)
         .read('primary'); // Force read from primary for fresh data
@@ -938,9 +938,12 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
           const rowKey = `${group.section}-${group.row}-${seatRange}`;
           
           const basePrice = parseFloat(group.inventory.listPrice);
-          const increasedPrice = basePrice < 35 
-            ? basePrice + 15 
-            : basePrice * (1 + priceIncreasePercentage / 100);
+          const effectiveMarkup = event.dynamicPricingEnabled
+            ? (event.calculatedMarkup ?? priceIncreasePercentage)
+            : priceIncreasePercentage;
+          const increasedPrice = basePrice < 35
+            ? basePrice + 15
+            : basePrice * (1 + effectiveMarkup / 100);
 
           newRowMap.set(rowKey, {
             seatCount: group.inventory.quantity,
