@@ -780,7 +780,7 @@ export class ScraperManager {
     }
   }
 
-async updateEventMetadata(eventId, scrapeResult) {
+async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
   const startTime = performance.now();
   const session = await Event.startSession();
   // save json here as well for scrapeResults 
@@ -854,6 +854,8 @@ async updateEventMetadata(eventId, scrapeResult) {
           {
             $set: {
               Available_Seats: currentTicketCount,
+              Venue_Capacity: venueCapacity,
+              Availability_Percentage: venueCapacity > 0 ? Math.round(currentTicketCount / venueCapacity * 100) : 0,
               Last_Updated: new Date(), // Ensure Last_Updated is always set to now
               "metadata.lastUpdate": new Date(),
               "metadata.ticketCount": currentTicketCount,
@@ -2505,7 +2507,8 @@ async updateEventMetadata(eventId, scrapeResult) {
       }
 
       // Update metadata and tracking (sets eventUpdateTimestamps + eventLastProcessedTime internally)
-      await this.updateEventMetadataAsync(eventId, result);
+      const venueCapacity = result.venueCapacity || 0;
+      await this.updateEventMetadataAsync(eventId, result, venueCapacity);
 
       // Success tracking
       this.successCount++;
@@ -2636,7 +2639,8 @@ async updateEventMetadata(eventId, scrapeResult) {
       }
 
       // Update metadata asynchronously
-      this.updateEventMetadataAsync(eventId, result);
+      const venueCapacity = result.venueCapacity || 0;
+      this.updateEventMetadataAsync(eventId, result, venueCapacity);
 
       // CSV generation removed
 
@@ -2727,7 +2731,7 @@ async updateEventMetadata(eventId, scrapeResult) {
   /**
    * Async metadata update to avoid blocking
    */
-  async updateEventMetadataAsync(eventId, scrapeResult) {
+  async updateEventMetadataAsync(eventId, scrapeResult, venueCapacity = 0) {
     try {
       // Immediately update tracking before processing in background
       this.eventUpdateTimestamps.set(eventId, moment());
@@ -2736,7 +2740,7 @@ async updateEventMetadata(eventId, scrapeResult) {
       // Process full metadata update in background (includes Last_Updated write)
       setImmediate(async () => {
         try {
-          await this.updateEventMetadata(eventId, scrapeResult);
+          await this.updateEventMetadata(eventId, scrapeResult, venueCapacity);
         } catch (error) {
           console.error(
             `Async metadata update error for ${eventId}: ${error.message}`

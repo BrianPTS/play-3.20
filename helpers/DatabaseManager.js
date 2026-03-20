@@ -30,7 +30,7 @@ class DatabaseManager {
   /**
    * Update event metadata and ticket info
    */
-  async updateEventMetadata(eventId, scrapeResult, scheduler) {
+  async updateEventMetadata(eventId, scrapeResult, scheduler, venueCapacity = 0) {
     const LOG_LEVEL =
       config && typeof config.LOG_LEVEL !== "undefined"
         ? config.LOG_LEVEL
@@ -70,6 +70,8 @@ class DatabaseManager {
           {
             $set: {
               Available_Seats: currentTicketCount,
+              Venue_Capacity: venueCapacity,
+              Availability_Percentage: venueCapacity > 0 ? Math.round(currentTicketCount / venueCapacity * 100) : 0,
               Last_Updated: new Date(),
               "metadata.basic": metadata,
             },
