@@ -941,9 +941,10 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
           const effectiveMarkup = event.dynamicPricingEnabled
             ? (event.calculatedMarkup ?? priceIncreasePercentage)
             : priceIncreasePercentage;
-          const increasedPrice = basePrice < 35
-            ? basePrice + 15
-            : basePrice * (1 + effectiveMarkup / 100);
+          const increasedPrice = Math.max(
+            basePrice + 15,
+            basePrice * (1 + effectiveMarkup / 100)
+          );
 
           newRowMap.set(rowKey, {
             seatCount: group.inventory.quantity,
