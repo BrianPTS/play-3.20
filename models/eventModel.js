@@ -53,6 +53,12 @@ const eventSchema = new mongoose.Schema(
       type: Number,
       default: 35, // Default 25% markup
     },
+    // A/B pricing strategy: "dynamic" | "static" | "manual"
+    pricingStrategy: {
+      type: String,
+      enum: ["dynamic", "static", "manual"],
+      default: "dynamic",
+    },
     Last_Updated: {
       type: Date,
       default: Date.now,

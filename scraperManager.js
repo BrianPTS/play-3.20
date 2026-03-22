@@ -940,14 +940,23 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
           const basePrice = parseFloat(group.inventory.listPrice);
           const SELL_FEE_FRACTION = 0.08;
           const MIN_ROI_PCT = 5;
-          const effectiveROI = event.dynamicPricingEnabled
-            ? (event.calculatedMarkup ?? priceIncreasePercentage)
-            : priceIncreasePercentage;
-          // Price that achieves target ROI% on cost after 8% sell fee
-          // Floor: at least 5% ROI on cost after fees
-          const targetPrice = basePrice * (1 + effectiveROI / 100) / (1 - SELL_FEE_FRACTION);
-          const floorPrice = basePrice * (1 + MIN_ROI_PCT / 100) / (1 - SELL_FEE_FRACTION);
-          const increasedPrice = Math.max(floorPrice, targetPrice);
+          const strategy = event.pricingStrategy || 'dynamic';
+          let increasedPrice;
+
+          if (strategy === 'manual') {
+            // Manual: use raw cost with only the minimum ROI floor
+            const floorPrice = basePrice * (1 + MIN_ROI_PCT / 100) / (1 - SELL_FEE_FRACTION);
+            increasedPrice = Math.max(basePrice, floorPrice);
+          } else {
+            const effectiveROI = event.dynamicPricingEnabled
+              ? (event.calculatedMarkup ?? priceIncreasePercentage)
+              : priceIncreasePercentage;
+            // Price that achieves target ROI% on cost after 8% sell fee
+            // Floor: at least 5% ROI on cost after fees
+            const targetPrice = basePrice * (1 + effectiveROI / 100) / (1 - SELL_FEE_FRACTION);
+            const floorPrice = basePrice * (1 + MIN_ROI_PCT / 100) / (1 - SELL_FEE_FRACTION);
+            increasedPrice = Math.max(floorPrice, targetPrice);
+          }
 
           newRowMap.set(rowKey, {
             seatCount: group.inventory.quantity,
