@@ -528,9 +528,28 @@ export const AttachRowSection = (
     .map((x) => {
       let offerGet = offers.find((e) => e.offerId == x.offerId);
 
-      // Global filter: exclude any listing whose section contains "table" (case-insensitive)
-      if (x.section && x.section.toLowerCase().includes('table')) {
-        return undefined;
+      // Global filter: exclude any listing where section, offer, or description contains "table" (case-insensitive)
+      {
+        const _sectionLower = (x.section || '').toLowerCase();
+        const _offerNameLower = (offerGet?.name || '').toLowerCase();
+        const _offerDescLower = (offerGet?.description || '').toLowerCase();
+        const _offerInvTypeLower = (offerGet?.inventoryType || '').toLowerCase();
+        let _descTextLower = '';
+        if (x.descriptionId && descriptions) {
+          const _descDoc = descriptions.find((d) => d.descriptionId === x.descriptionId);
+          if (_descDoc && _descDoc.descriptions) {
+            _descTextLower = _descDoc.descriptions.join(' ').toLowerCase();
+          }
+        }
+        if (
+          _sectionLower.includes('table') ||
+          _offerNameLower.includes('table') ||
+          _offerDescLower.includes('table') ||
+          _offerInvTypeLower.includes('table') ||
+          _descTextLower.includes('table')
+        ) {
+          return undefined;
+        }
       }
 
       // Check accessibility exclusion filters first
