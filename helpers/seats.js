@@ -127,6 +127,10 @@ class Cluster {
 
     let returnData = [];
     data.map(x => {
+      // Global filter: skip any facet whose section contains "table" (case-insensitive)
+      if (x?.section && x.section.toLowerCase().includes('table')) {
+        return undefined;
+      }
       if (x?.places && x?.places.length > 0) {
         let _uData = getSeatsBatch(x?.places[0]);
         if (_uData) {

@@ -528,6 +528,11 @@ export const AttachRowSection = (
     .map((x) => {
       let offerGet = offers.find((e) => e.offerId == x.offerId);
 
+      // Global filter: exclude any listing whose section contains "table" (case-insensitive)
+      if (x.section && x.section.toLowerCase().includes('table')) {
+        return undefined;
+      }
+
       // Check accessibility exclusion filters first
       if (GLOBAL_FILTERS.excludeAccessibility) {
         // Check for any accessibility indicators in various fields
