@@ -2423,7 +2423,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
       // Redis may be stale if the frontend wrote directly to MongoDB.
       const eventDoc = await Event.findOne(
         { Event_ID: eventId },
-        { Skip_Scraping: 1 }
+        { Skip_Scraping: 1, source: 1, URL: 1 }
       ).lean();
       if (!eventDoc || eventDoc.Skip_Scraping) {
         this.logWithTime(
@@ -2491,26 +2491,38 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
         throw new Error("Failed to obtain proxy after multiple attempts");
       }
 
-      // No header/cookie refresh needed — browser page pool has authentic cookies.
-      // Just pass the event directly to ScrapeEvent.
-      const eventWithNaturalSession = {
-        eventId: eventId,
-        headers: null, // Not needed — browser pool handles cookies & headers
-        sessionId: `pool-${eventId}-${Date.now()}`,
-        proxyId: proxy?.proxy || "default",
-        processingStart: startTime,
-        naturalBehavior: true,
-      };
-
       // Perform scrape with timeout
       const extendedTimeout = (config.SCRAPE_TIMEOUT || 30000) + 5000; // Extra 5s
+      let result;
 
-      const result = await Promise.race([
-        this.throttledScrapeEvent(eventWithNaturalSession, proxyAgent, proxy),
-        setTimeout(extendedTimeout).then(() => {
-          throw new Error(`Natural scrape timeout after ${extendedTimeout}ms`);
-        }),
-      ]);
+      // Route to the correct scraper based on event source
+      if (eventDoc.source === 'ticketscom') {
+        // tickets.com events: use browser-based XML scraper
+        const { scrapeTicketsComEvent } = await import('./helpers/ticketscomScraper.js');
+        const tcTimeout = extendedTimeout + 60000; // Extra 60s for browser startup + section iteration
+        result = await Promise.race([
+          scrapeTicketsComEvent(eventDoc.URL, eventId),
+          setTimeout(tcTimeout).then(() => {
+            throw new Error(`tickets.com scrape timeout after ${tcTimeout}ms`);
+          }),
+        ]);
+      } else {
+        // Ticketmaster events: use API-based scraper (default)
+        const eventWithNaturalSession = {
+          eventId: eventId,
+          headers: null,
+          sessionId: `pool-${eventId}-${Date.now()}`,
+          proxyId: proxy?.proxy || "default",
+          processingStart: startTime,
+          naturalBehavior: true,
+        };
+        result = await Promise.race([
+          this.throttledScrapeEvent(eventWithNaturalSession, proxyAgent, proxy),
+          setTimeout(extendedTimeout).then(() => {
+            throw new Error(`Natural scrape timeout after ${extendedTimeout}ms`);
+          }),
+        ]);
+      }
 
       // Validate result with more lenient criteria
       if (!result) {

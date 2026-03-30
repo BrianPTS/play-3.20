@@ -56,6 +56,7 @@ export const createEvent = async (req, res) => {
       Zone,
       priceIncreasePercentage = 25, // Default 25% if not provided
       mapping_id,
+      source = 'ticketmaster',
     } = req.body;
 
     // Use mapping_id directly
@@ -97,6 +98,7 @@ export const createEvent = async (req, res) => {
       Skip_Scraping,
       priceIncreasePercentage,
       mapping_id: finalMappingId,
+      source,
       metadata: {
         iterationNumber: 0,
       },
