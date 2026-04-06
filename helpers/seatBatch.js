@@ -188,6 +188,13 @@ function CreateConsicutiveSeats(data) {
 function getSplitType(arr, offer) {
   var length = arr.length;
 
+  // "No split" detection: if offer has sellableQuantities with only one value,
+  // the buyer must purchase exactly that many (e.g. "must purchase all 4").
+  // In this case, return just the quantity so it can only be sold as a whole group.
+  if (offer?.sellableQuantities && offer.sellableQuantities.length === 1) {
+    return String(length);
+  }
+
   if (
     offer &&
     offer?.ticketTypeUnsoldQualifier &&
@@ -362,9 +369,12 @@ function CreateInventoryAndLine(
       tags: "AWS",
       offerId: data?.offerId,
       splitType:
-        offer?.inventoryType?.toLowerCase() === "resale"
-          ? "DEFAULT"
-          : "NEVERLEAVEONE",
+        // No-split offers: sellableQuantities has only one value (e.g. "must purchase all 4")
+        offer?.sellableQuantities?.length === 1
+          ? "NOSPLIT"
+          : offer?.inventoryType?.toLowerCase() === "resale"
+            ? "DEFAULT"
+            : "NEVERLEAVEONE",
       resaleType:
         offer?.inventoryType?.toLowerCase() === "resale"
           ? resaleClassification.get(data?.offerId) || "unknown"
