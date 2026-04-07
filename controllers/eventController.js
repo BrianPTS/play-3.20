@@ -59,6 +59,11 @@ export const createEvent = async (req, res) => {
       source = 'ticketmaster',
     } = req.body;
 
+    // Block Rhode Island events
+    if (/,\s*RI$/i.test((Venue || '').trim())) {
+      return res.status(400).json({ status: "error", message: "Rhode Island events are not allowed." });
+    }
+
     // Use mapping_id directly
     const finalMappingId = mapping_id;
 
