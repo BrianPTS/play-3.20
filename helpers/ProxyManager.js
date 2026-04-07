@@ -33,6 +33,10 @@ class ProxyManager {
    */
   async initialize() {
     await this.reloadFromDB();
+    // Auto-reload from DB every 60 seconds to pick up portal changes
+    this._reloadInterval = setInterval(() => {
+      this.reloadFromDB().catch(() => {});
+    }, 60_000);
     return this;
   }
 
