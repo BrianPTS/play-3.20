@@ -296,6 +296,9 @@ export class ScraperManager {
         "success"
       );
 
+      // Load proxies from database (falls back to hardcoded if DB is empty)
+      await this.proxyManager.initialize();
+
       // Background retry processor removed - retries handled in sequential processing
 
       // Start performance monitoring

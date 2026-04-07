@@ -1,4 +1,5 @@
 import proxyArray from "./proxy.js";
+import { Proxy } from "../models/index.js";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { HttpsProxyAgent } = require("https-proxy-agent");
@@ -13,23 +14,62 @@ class ProxyManager {
     this.eventToProxy = new Map(); // Maps eventId to assigned proxy
     this.MAX_EVENTS_PER_PROXY = 1; // Increased from 1 to allow more events per proxy
     this.BATCH_SIZE = 50; // Significantly increased for maximum batch throughput
+    // Start with hardcoded proxies as fallback; initialize() loads from DB
     this.proxies = [...proxyArray.proxies];
     this.lastAssignedProxyIndex = -1;
     this.proxyLastUsed = new Map(); // Track when proxies were last used
-    
+
     // Initialize usage counts
     this.proxies.forEach(proxy => {
       this.proxyUsage.set(proxy.proxy, new Set());
     });
-    
-    this.log("ProxyManager initialized with " + this.proxies.length + " proxies");
+
+    this.log("ProxyManager initialized with " + this.proxies.length + " proxies (hardcoded fallback)");
   }
-  
+
   /**
-   * Initialize the proxy manager
+   * Initialize the proxy manager — loads proxies from MongoDB.
+   * Falls back to hardcoded proxy.js if DB has none.
    */
   async initialize() {
+    await this.reloadFromDB();
     return this;
+  }
+
+  /**
+   * Reload proxies from MongoDB. Called on init and can be called
+   * at any time to pick up portal changes without restarting.
+   */
+  async reloadFromDB() {
+    try {
+      const dbProxies = await Proxy.find({ active: true }).lean();
+      if (dbProxies.length > 0) {
+        // Convert DB format to ProxyManager format: { proxy: "ip:port", username, password }
+        const converted = dbProxies.map(p => ({
+          proxy: `${p.ip}:${p.port}`,
+          username: p.username,
+          password: p.password,
+        }));
+
+        // Preserve existing assignments for proxies that still exist
+        const newProxySet = new Set(converted.map(p => p.proxy));
+
+        this.proxies = converted;
+
+        // Re-initialize usage tracking, keeping active assignments
+        const oldUsage = new Map(this.proxyUsage);
+        this.proxyUsage = new Map();
+        this.proxies.forEach(proxy => {
+          this.proxyUsage.set(proxy.proxy, oldUsage.get(proxy.proxy) || new Set());
+        });
+
+        this.log(`[ProxyManager] Reloaded ${converted.length} proxies from database`);
+      } else {
+        this.log("[ProxyManager] No active proxies in DB — keeping hardcoded fallback (" + this.proxies.length + " proxies)");
+      }
+    } catch (err) {
+      this.log("[ProxyManager] Failed to load proxies from DB, keeping current set: " + err.message, "warning");
+    }
   }
   
   /**

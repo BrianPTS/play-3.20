@@ -38,6 +38,16 @@ export const startScraper = async (req, res) => {
   }
 };
 
+export const reloadProxies = async (req, res) => {
+  try {
+    await scraperManager.proxyManager.reloadFromDB();
+    const count = scraperManager.proxyManager.proxies.length;
+    res.json({ status: "success", message: `Reloaded ${count} proxies from database` });
+  } catch (error) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+};
+
 export const stopScraper = (req, res) => {
   try {
     if (!scraperManager.isRunning) {
