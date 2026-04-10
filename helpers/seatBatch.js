@@ -762,11 +762,46 @@ export const AttachRowSection = (
       return !hasDuplicate || index === 0; // Keep the first object or objects without duplicates
     });
 
-  // fs.writeFileSync(`debug/seatBatch_${event.eventId}.json`, JSON.stringify(finalData, null, 2));
+  // ── GA/Lawn Processing ──
+  // GA facets have no individual places (places: []) — they only have a count.
+  // Each GA facet = one listing group. Bypass the map-join/consecutive-seat pipeline entirely.
+  const gaEntries = data.filter(x => x.isGA === true);
+  gaEntries.forEach(ga => {
+    const offerGet = offers.find(e => e.offerId == ga.offerId);
+    if (!offerGet) return;
 
-  // // Debug: Final processed data after all filters
-  // fs.writeFileSync(`debug/finalProcessed_${event.eventId}.json`, JSON.stringify(finalData, null, 2));
-  // console.log(`Final processed data written to debug/finalProcessed_${event.eventId}.json - Total items: ${finalData.length}`);
+    // Apply same offer filters as regular seats
+    if (offerGet.name == "Special Offers") return;
+    if (/4[\s-]*pack/i.test(offerGet.name)) return;
+    if (/four[\s-]*pack/i.test(offerGet.name)) return;
+    if (offerGet?.protected == true) return;
+
+    // Apply accessibility filter
+    if (GLOBAL_FILTERS.excludeAccessibility && ga.accessibility && ga.accessibility.length > 0) return;
+
+    // Apply inventory type filter
+    if (GLOBAL_FILTERS.inventoryType.length > 0) {
+      if (!GLOBAL_FILTERS.inventoryType.some(ft =>
+        offerGet.inventoryType?.toLowerCase().includes(ft.toLowerCase())
+      )) return;
+    }
+
+    // Build synthetic seats array (1, 2, 3, ... count)
+    const syntheticSeats = Array.from({ length: ga.count }, (_, i) => i + 1);
+
+    const gaData = {
+      section: ga.section,
+      row: ga.section,       // use section name as row (GA1, GA2, etc.)
+      seats: syntheticSeats,
+      offerId: ga.offerId,
+      accessibility: ga.accessibility || "",
+      descriptionId: ga.descriptionId,
+      attributes: ga.attributes || [],
+    };
+
+    const line = CreateInventoryAndLine(gaData, offerGet, event, descriptions, resaleClassification);
+    if (line) finalData.push(line);
+  });
 
   // Venue capacity = total number of seats in the map API data
   const venueCapacity = allAvailableSeats.length;

@@ -176,6 +176,28 @@ class Cluster {
           })
         }
       }
+      // GA/Lawn: no individual places, just a count
+      else if (x?.count && x.count > 0) {
+        returnData.push({
+          row: x.row || "GA",
+          section: x.section || "",
+          selection: x?.inventoryTypes?.length > 0 ? x.inventoryTypes[0] : "",
+          offerId: x?.offers?.length > 0 ? (x.offers.length > 1
+            ? x.offers.reduce((s, c) => c.length < s.length ? c : s)
+            : x.offers[0]) : "",
+          listingId: "",
+          places: [],
+          seats: [],
+          lowSeat: 0,
+          highSeat: 0,
+          count: x.count,
+          isGA: true,
+          accessibility: x.accessibility?.length > 0 && x.accessibility.includes("wheelchair")
+            ? "wheelchair" : x.accessibility?.length > 0 ? x.accessibility[0] : "",
+          descriptionId: x.description,
+          attributes: x.attributes,
+        });
+      }
       else return undefined;
     });
     // fs.writeFileSync("debug/nanoPalaces.json", JSON.stringify(returnData));
