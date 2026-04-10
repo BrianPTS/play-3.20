@@ -24,7 +24,7 @@ class ProxyManager {
       this.proxyUsage.set(proxy.proxy, new Set());
     });
 
-    this.log("ProxyManager initialized with " + this.proxies.length + " proxies (hardcoded fallback)");
+    this.log("ProxyManager initialized — waiting for database load");
   }
 
   /**
@@ -69,7 +69,7 @@ class ProxyManager {
 
         this.log(`[ProxyManager] Reloaded ${converted.length} proxies from database`);
       } else {
-        this.log("[ProxyManager] No active proxies in DB — keeping hardcoded fallback (" + this.proxies.length + " proxies)");
+        this.log("[ProxyManager] WARNING: No active proxies in database. Upload proxies via the portal Proxies page.");
       }
     } catch (err) {
       this.log("[ProxyManager] Failed to load proxies from DB, keeping current set: " + err.message, "warning");
