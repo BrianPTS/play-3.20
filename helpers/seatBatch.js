@@ -375,6 +375,8 @@ function CreateInventoryAndLine(
           : offer?.inventoryType?.toLowerCase() === "resale"
             ? "DEFAULT"
             : "NEVERLEAVEONE",
+      inventoryTag:
+        offer?.inventoryType?.toLowerCase() === "resale" ? "resale" : "standard",
       resaleType:
         offer?.inventoryType?.toLowerCase() === "resale"
           ? resaleClassification.get(data?.offerId) || "unknown"
