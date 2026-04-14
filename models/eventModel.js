@@ -85,6 +85,11 @@ const eventSchema = new mongoose.Schema(
       newStatus: String,
       source: { type: String, default: 'daily-sync' },
     }],
+    // When non-null, scraper automatically resumes this event at the given time
+    autoResumeAt: {
+      type: Date,
+      default: null,
+    },
     // Dynamic pricing engine
     dynamicPricingEnabled: {
       type: Boolean,
