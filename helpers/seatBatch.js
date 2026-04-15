@@ -45,11 +45,30 @@ function GetMapSeats(data) {
           if (SECTION.segments && SECTION.segments.length > 0)
             SECTION.segments.map((ROW) => {
               ROW.placesNoKeys.map((seat) => {
+                // TM map tuple: [placeId, seatNumber, x, y, sizeCode, physicalIdx, ?]
+                // physicalIdx is the physical position along the row — this is
+                // the ground truth for adjacency in odd/even venues where
+                // seat numbers skip (e.g. 14,16,18,... in Greek Theatre REAR C).
+                const physicalIdx =
+                  typeof seat[5] === 'number' && Number.isFinite(seat[5])
+                    ? seat[5]
+                    : null;
+                const xCoord =
+                  typeof seat[2] === 'number' && Number.isFinite(seat[2])
+                    ? seat[2]
+                    : null;
+                const yCoord =
+                  typeof seat[3] === 'number' && Number.isFinite(seat[3])
+                    ? seat[3]
+                    : null;
                 seatArray.push({
                   section: SECTION?.name,
                   row: ROW?.name,
                   seat: seat[1],
                   seatId: seat[0],
+                  physicalIdx,
+                  xCoord,
+                  yCoord,
                 });
               });
             });
@@ -63,6 +82,9 @@ function GetMapSeats(data) {
                   row: "GA", // General Admission typically doesn't have a specific row
                   seat: seat[1], // Assuming seat number is at index 1
                   seatId: seat[0], // Assuming seat ID is at index 0
+                  physicalIdx: null, // GA has no physical layout
+                  xCoord: null,
+                  yCoord: null,
                 });
               });
             } else if (SECTION.name && SECTION.id) {
@@ -72,6 +94,9 @@ function GetMapSeats(data) {
                 row: "GA",
                 seat: "GA", // Placeholder for seat number if not available
                 seatId: SECTION?.id, // Use section id as seatId if specific seatId is not available
+                physicalIdx: null,
+                xCoord: null,
+                yCoord: null,
               });
             }
             // console.log("Processing General Admission for SECTION:", SECTION);
@@ -83,25 +108,94 @@ function GetMapSeats(data) {
 
   return seatArray;
 }
-function breakArray(arr) {
-  let result = [];
-  let subarray = [arr[0]];
+/**
+ * Split a row of seats into physically-consecutive runs.
+ *
+ * If `physicalIndices` is provided and its length matches `seats`,
+ * adjacency is checked using the physical-position index — this correctly
+ * handles odd/even venues (seats 14,16,18,... sitting next to each other).
+ * If not provided, falls back to the legacy seat-number ±1 check.
+ *
+ * Returns an array of { seats: number[], physicalIndices: number[]|null }.
+ */
+export function breakArray(seats, physicalIndices = null) {
+  if (!seats || seats.length === 0) return [];
 
-  for (let i = 0; i < arr.length - 1; i++) {
-    if (arr[i] + 1 !== arr[i + 1]) {
-      result.push(subarray);
-      subarray = [arr[i + 1]];
+  const useIdx =
+    Array.isArray(physicalIndices) && physicalIndices.length === seats.length;
+  const adjacencyArr = useIdx ? physicalIndices : seats;
+
+  const result = [];
+  let currentSeats = [seats[0]];
+  let currentIdx = useIdx ? [physicalIndices[0]] : null;
+
+  for (let i = 0; i < seats.length - 1; i++) {
+    if (adjacencyArr[i] + 1 !== adjacencyArr[i + 1]) {
+      result.push({ seats: currentSeats, physicalIndices: currentIdx });
+      currentSeats = [seats[i + 1]];
+      currentIdx = useIdx ? [physicalIndices[i + 1]] : null;
     } else {
-      subarray.push(arr[i + 1]);
+      currentSeats.push(seats[i + 1]);
+      if (useIdx) currentIdx.push(physicalIndices[i + 1]);
     }
   }
 
-  result.push(subarray);
+  result.push({ seats: currentSeats, physicalIndices: currentIdx });
   return result;
 }
 
-function CreateConsicutiveSeats(data) {
+/**
+ * Merge groups whose seats sit physically adjacent to each other.
+ *
+ * Adjacency is checked using `physicalIndices` (the position-along-row
+ * index from TM's map response) when available, so odd/even venues
+ * produce correct block sizes. Falls back to seat-number ±1 for legacy
+ * groups where physicalIndices aren't populated.
+ *
+ * The internal arrays `seats` and `physicalIndices` are kept in lockstep
+ * — same length, same ordering (by physicalIdx ascending when present).
+ */
+export function CreateConsicutiveSeats(data) {
   const mergedData = [];
+
+  // Helper: return true iff groupA and groupB are physically adjacent
+  // (groupA's last seat is next to groupB's first, in either direction).
+  // Uses physicalIndices when both groups have them; falls back to seat numbers.
+  const areAdjacent = (a, b) => {
+    const useIdx =
+      Array.isArray(a.physicalIndices) &&
+      Array.isArray(b.physicalIndices) &&
+      a.physicalIndices.length === a.seats.length &&
+      b.physicalIndices.length === b.seats.length;
+    const aArr = useIdx ? a.physicalIndices : a.seats;
+    const bArr = useIdx ? b.physicalIndices : b.seats;
+    const aLast = Math.max(...aArr);
+    const aFirst = Math.min(...aArr);
+    const bFirst = Math.min(...bArr);
+    const bLast = Math.max(...bArr);
+    return aLast + 1 === bFirst || bLast + 1 === aFirst;
+  };
+
+  // Helper: merge groupB's seats+physicalIndices into groupA, keeping them
+  // sorted by physicalIdx (when available) or seat number.
+  const mergeInto = (a, b) => {
+    const combined = a.seats.map((s, i) => ({
+      seat: s,
+      idx: Array.isArray(a.physicalIndices) ? a.physicalIndices[i] : null,
+    }));
+    b.seats.forEach((s, i) => {
+      combined.push({
+        seat: s,
+        idx: Array.isArray(b.physicalIndices) ? b.physicalIndices[i] : null,
+      });
+    });
+    const allHaveIdx = combined.every(
+      (c) => typeof c.idx === 'number' && Number.isFinite(c.idx)
+    );
+    combined.sort((x, y) => (allHaveIdx ? x.idx - y.idx : x.seat - y.seat));
+    a.seats = combined.map((c) => c.seat);
+    a.physicalIndices = allHaveIdx ? combined.map((c) => c.idx) : null;
+  };
 
   data.forEach((item) => {
     let merged = false;
@@ -113,19 +207,8 @@ function CreateConsicutiveSeats(data) {
         group.row === item.row &&
         group.offerId === item.offerId
       ) {
-        // Check if seats are consecutive (either direction)
-        const groupLastSeat = Math.max(...group.seats);
-        const groupFirstSeat = Math.min(...group.seats);
-        const itemFirstSeat = Math.min(...item.seats);
-        const itemLastSeat = Math.max(...item.seats);
-
-        // Check if they can be merged (consecutive) - fixed logic
-        if (
-          groupLastSeat + 1 === itemFirstSeat ||
-          itemLastSeat + 1 === groupFirstSeat
-        ) {
-          group.seats.push(...item.seats);
-          group.seats.sort((a, b) => a - b); // Keep seats sorted
+        if (areAdjacent(group, item)) {
+          mergeInto(group, item);
           merged = true;
           break;
         }
@@ -133,12 +216,32 @@ function CreateConsicutiveSeats(data) {
     }
 
     if (!merged) {
+      // Seed a new group — sort by physicalIdx if we have it.
+      const allHaveIdx =
+        Array.isArray(item.physicalIndices) &&
+        item.physicalIndices.length === item.seats.length;
+      let sortedSeats;
+      let sortedIdx;
+      if (allHaveIdx) {
+        const pairs = item.seats.map((s, i) => ({
+          seat: s,
+          idx: item.physicalIndices[i],
+        }));
+        pairs.sort((a, b) => a.idx - b.idx);
+        sortedSeats = pairs.map((p) => p.seat);
+        sortedIdx = pairs.map((p) => p.idx);
+      } else {
+        sortedSeats = [...item.seats].sort((a, b) => a - b);
+        sortedIdx = null;
+      }
+
       mergedData.push({
         amount: item.amount,
         lineItemType: item.lineItemType,
         section: item.section,
         row: item.row,
-        seats: [...item.seats].sort((a, b) => a - b), // Ensure seats are sorted
+        seats: sortedSeats,
+        physicalIndices: sortedIdx,
         offerId: item.offerId,
         accessibility: item?.accessibility,
         descriptionId: item?.descriptionId,
@@ -159,24 +262,13 @@ function CreateConsicutiveSeats(data) {
         if (
           group1.section === group2.section &&
           group1.row === group2.row &&
-          group1.offerId === group2.offerId
+          group1.offerId === group2.offerId &&
+          areAdjacent(group1, group2)
         ) {
-          const group1LastSeat = Math.max(...group1.seats);
-          const group1FirstSeat = Math.min(...group1.seats);
-          const group2FirstSeat = Math.min(...group2.seats);
-          const group2LastSeat = Math.max(...group2.seats);
-
-          // Check if they can be merged (consecutive)
-          if (
-            group1LastSeat + 1 === group2FirstSeat ||
-            group2LastSeat + 1 === group1FirstSeat
-          ) {
-            group1.seats.push(...group2.seats);
-            group1.seats.sort((a, b) => a - b);
-            mergedData.splice(j, 1); // Remove the merged group
-            changed = true;
-            break;
-          }
+          mergeInto(group1, group2);
+          mergedData.splice(j, 1); // Remove the merged group
+          changed = true;
+          break;
         }
       }
       if (changed) break;
@@ -496,17 +588,28 @@ export const AttachRowSection = (
   });
 
   //add row and get seats in order
+  // NOTE: Seats are sorted by physicalIdx (position along the row) when
+  // available, falling back to seat-number order. This matters for
+  // odd/even venues (e.g. Greek Theatre LA REAR C, where seats go
+  // 14,16,18,... but are physically adjacent) — physicalIdx is the
+  // ground truth TM provides for adjacency.
   groupedSeats
     .map((x) => {
       if (x?.seats.length > 0) {
+        const allHavePhysical = x.seats.every(
+          (y) => typeof y.physicalIdx === 'number' && Number.isFinite(y.physicalIdx)
+        );
+        const sorted = [...x.seats].sort((a, b) => {
+          if (allHavePhysical) return a.physicalIdx - b.physicalIdx;
+          return parseInt(a.seat) - parseInt(b.seat);
+        });
         return {
           ...x,
-          row: x?.seats[0]?.row,
-          seats: x?.seats
-            .map((y) => parseInt(y.seat))
-            .sort((a, b) => {
-              return a - b;
-            }),
+          row: sorted[0]?.row,
+          seats: sorted.map((y) => parseInt(y.seat)),
+          physicalIndices: allHavePhysical
+            ? sorted.map((y) => y.physicalIdx)
+            : null,
         };
       } else {
         return undefined;
@@ -515,14 +618,16 @@ export const AttachRowSection = (
     .filter((x) => x != undefined)
 
     //break seats if it is not consicutive ex [1,2,3,6,7] => [1,2,3],[6,7]
+    //(checks physicalIdx when available — handles odd/even venues)
     .map((x) => {
-      let breakOBJ = breakArray(x.seats);
+      let breakOBJ = breakArray(x.seats, x.physicalIndices);
 
       if (breakOBJ.length > 1) {
         breakOBJ.map((y) => {
           returnData.push({
             ...x,
-            seats: y,
+            seats: y.seats,
+            physicalIndices: y.physicalIndices,
           });
         });
       } else {
