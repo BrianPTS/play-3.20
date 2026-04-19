@@ -90,6 +90,12 @@ const eventSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Sport / category (NFL, MLB, NHL, NBA, OTHER). Set at import time.
+    eventType: {
+      type: String,
+      enum: ['NFL', 'MLB', 'NHL', 'NBA', 'OTHER', null],
+      default: null,
+    },
     // Dynamic pricing engine
     dynamicPricingEnabled: {
       type: Boolean,
