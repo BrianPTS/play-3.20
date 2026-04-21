@@ -884,6 +884,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
               "inventory.listPrice": 1,
               "inventory.quantity": 1,
               "inventory.inventoryId": 1,
+              "inventory.offerId": 1,
             }
           ).session(session).read('primary'); // Force read from primary for fresh data
 
@@ -911,11 +912,14 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
 
           existingRowMap.set(rowKey, {
             _id: group._id,
+            section: group.section,
+            row: group.row,
             seatCount: group.seatCount,
             seats: extractedSeats,
             price: group.inventory?.listPrice,
             quantity: group.inventory?.quantity,
             inventoryId: group.inventory?.inventoryId,
+            offerId: group.inventory?.offerId,
           });
         });
 
@@ -1012,14 +1016,9 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             // Only generate new inventory IDs for truly new inventory or deleted/re-added rows
             newData.groupData.inventory.inventoryId = existingData.inventoryId;
 
-            // Decide how to handle changes:
-            // - Seats/quantity changed → composition changed, must delete + recreate
-            // - Only price changed → update in-place to preserve inventory ID
-             if (seatsChanged || quantityChanged) {
-               rowsToDelete.push(existingData._id);
-               rowsToInsert.push({ rowKey, data: newData });
-             } else if (priceChanged) {
-               // Price-only change: preserve the inventory ID on Automatiq
+            // Any change on a matching rowKey → in-place update with delta_sync
+            // to preserve the inventory ID on Automatiq.
+             if (seatsChanged || quantityChanged || priceChanged) {
                rowsToUpdate.push({
                  _id: existingData._id,
                  data: newData,
@@ -1035,6 +1034,47 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
         for (const [rowKey, newData] of newRowMap) {
           if (!existingRowMap.has(rowKey)) {
             rowsToInsert.push({ rowKey, data: newData });
+          }
+        }
+
+        // Reconciliation pass: match "deleted" rows to "inserted" rows by
+        // (section, row, offerId). This catches quantity changes where the
+        // seatRange shifts (e.g., 4-pack [1-4] shrinks to 3-pack [1-3] after
+        // one seat sells). Matched pairs are converted into in-place updates
+        // so the inventory ID is preserved on Automatiq.
+        if (rowsToDelete.length > 0 && rowsToInsert.length > 0) {
+          const deleteById = new Map();
+          for (const [rowKey, existingData] of existingRowMap) {
+            if (rowsToDelete.some((id) => String(id) === String(existingData._id))) {
+              const candidateKey = `${existingData.section}-${existingData.row}-${existingData.offerId || ''}`;
+              if (!deleteById.has(candidateKey)) deleteById.set(candidateKey, []);
+              deleteById.get(candidateKey).push(existingData);
+            }
+          }
+
+          const matchedDeleteIds = new Set();
+          const matchedInsertKeys = new Set();
+          for (const insertItem of rowsToInsert) {
+            const group = insertItem.data.groupData;
+            const candidateKey = `${group.section}-${group.row}-${group.inventory?.offerId || ''}`;
+            const candidates = deleteById.get(candidateKey);
+            if (candidates && candidates.length > 0) {
+              const candidate = candidates.shift();
+              if (!candidate.inventoryId) continue;
+              matchedDeleteIds.add(String(candidate._id));
+              matchedInsertKeys.add(insertItem.rowKey);
+              rowsToUpdate.push({
+                _id: candidate._id,
+                data: insertItem.data,
+                existingInventoryId: candidate.inventoryId,
+              });
+            }
+          }
+
+          if (matchedDeleteIds.size > 0) {
+            rowsToDelete = rowsToDelete.filter((id) => !matchedDeleteIds.has(String(id)));
+            rowsToInsert = rowsToInsert.filter((item) => !matchedInsertKeys.has(item.rowKey));
+            console.log(`[RECONCILED ${eventId}] ${matchedDeleteIds.size} delete+insert pairs converted to in-place updates (IDs preserved)`);
           }
         }
 
@@ -1124,41 +1164,52 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             const inHandDateObj = moment(eventDateObj).subtract(1, "day");
             const formattedInHandDate = inHandDateObj.toISOString();
 
-            // Build bulk DB update operations (price fields only)
-            const bulkOps = rowsToUpdate.map(({ _id, data }) => ({
-              updateOne: {
-                filter: { _id },
-                update: {
-                  $set: {
-                    'inventory.listPrice': data.price,
-                    'inventory.cost': data.groupData.inventory.cost,
-                    'inventory.face_price': data.groupData.inventory.faceValue,
-                    'inventory.taxed_cost': data.groupData.inventory.taxedCost,
-                    'seats': data.groupData.seats.map((seatNumber) => ({
-                      number: seatNumber.toString(),
-                      price: data.price,
-                    })),
-                    'inventory.tickets': data.groupData.inventory.tickets.map((ticket) => ({
-                      id: ticket.id,
-                      seatNumber: ticket.seatNumber,
-                      notes: ticket.notes,
-                      cost: ticket.cost,
-                      faceValue: ticket.faceValue,
-                      taxedCost: ticket.taxedCost,
-                      sellPrice:
-                        typeof ticket?.sellPrice === "number" && !isNaN(ticket?.sellPrice)
-                          ? ticket.sellPrice
-                          : parseFloat(ticket?.cost || ticket?.faceValue || 0),
-                      stockType: ticket.stockType,
-                      eventId: ticket.eventId,
-                      accountId: ticket.accountId,
-                      status: ticket.status,
-                      auditNote: ticket.auditNote,
-                    })),
+            // Build bulk DB update operations — handle price AND quantity/seat changes
+            const bulkOps = rowsToUpdate.map(({ _id, data }) => {
+              const group = data.groupData;
+              const sortedSeatNums = [...group.seats].map(Number).sort((a, b) => a - b);
+              const seatRange = sortedSeatNums.length > 0
+                ? `${sortedSeatNums[0]}-${sortedSeatNums[sortedSeatNums.length - 1]}`
+                : 'no-seats';
+
+              return {
+                updateOne: {
+                  filter: { _id },
+                  update: {
+                    $set: {
+                      'seats': group.seats.map((seatNumber) => ({
+                        number: seatNumber.toString(),
+                        price: data.price,
+                      })),
+                      'seatCount': group.inventory.quantity,
+                      'seatRange': seatRange,
+                      'inventory.quantity': group.inventory.quantity,
+                      'inventory.listPrice': data.price,
+                      'inventory.cost': group.inventory.cost,
+                      'inventory.face_price': group.inventory.faceValue,
+                      'inventory.taxed_cost': group.inventory.taxedCost,
+                      'inventory.tickets': group.inventory.tickets.map((ticket) => ({
+                        id: ticket.id,
+                        seatNumber: ticket.seatNumber,
+                        notes: ticket.notes,
+                        cost: ticket.cost,
+                        faceValue: ticket.faceValue,
+                        taxedCost: ticket.taxedCost,
+                        sellPrice:
+                          typeof ticket?.sellPrice === "number" && !isNaN(ticket?.sellPrice)
+                            ? ticket.sellPrice
+                            : parseFloat(ticket?.cost || ticket?.faceValue || 0),
+                        stockType: ticket.stockType,
+                        eventId: ticket.eventId,
+                        accountId: ticket.accountId,
+                        status: ticket.status,
+                        auditNote: ticket.auditNote,
+                      })),
+                    },
                   },
                 },
-              },
-            }));
+              };
+            });
 
             try {
               await ConsecutiveGroup.bulkWrite(bulkOps, { session });
