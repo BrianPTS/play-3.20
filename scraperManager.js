@@ -1012,16 +1012,20 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             // Only generate new inventory IDs for truly new inventory or deleted/re-added rows
             newData.groupData.inventory.inventoryId = existingData.inventoryId;
 
-            // Now, decide if the DB record needs an update for any of these fields
-             // Force delete-and-insert for all changes to ensure fresh inventory IDs
-             if (seatsChanged || priceChanged || quantityChanged) {
+            // Decide how to handle changes:
+            // - Seats/quantity changed → composition changed, must delete + recreate
+            // - Only price changed → update in-place to preserve inventory ID
+             if (seatsChanged || quantityChanged) {
                rowsToDelete.push(existingData._id);
                rowsToInsert.push({ rowKey, data: newData });
+             } else if (priceChanged) {
+               // Price-only change: preserve the inventory ID on Automatiq
+               rowsToUpdate.push({
+                 _id: existingData._id,
+                 data: newData,
+                 existingInventoryId: existingData.inventoryId,
+               });
              } else {
-              // This 'else' implies:
-              // 1. !seatsChanged && !priceChanged (so inventoryId was preserved)
-              // 2. AND !quantityChanged (so no other tracked change)
-              // Therefore, truly no changes to the row data itself.
               unchangedRows++;
             }
           }
@@ -1111,175 +1115,115 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             }
           }
 
-          // Handle updates by deleting existing inventory and adding new ones
+          // Handle price-only updates: preserve inventory IDs via in-place DB update + delta_sync
           if (rowsToUpdate.length > 0) {
-            // First, get inventory IDs for external API deletion
-            const groupsToUpdate = await ConsecutiveGroup.find({
-              _id: { $in: rowsToUpdate.map(row => row._id) }
-            }, { 'inventory.inventoryId': 1 }).session(session);
-            
-            const inventoryIdsToUpdate = groupsToUpdate
-              .map(group => group.inventory?.inventoryId)
-              .filter(id => id) // Filter out null/undefined IDs
-              .map(id => String(id)); // Convert to strings for API
+            const eventDateObj =
+              typeof event_date === "string"
+                ? new Date(event_date)
+                : event_date;
+            const inHandDateObj = moment(eventDateObj).subtract(1, "day");
+            const formattedInHandDate = inHandDateObj.toISOString();
 
-            // Delete existing inventory from database first
-            await ConsecutiveGroup.deleteMany({
-              _id: { $in: rowsToUpdate.map(row => row._id) },
-            }).session(session);
+            // Build bulk DB update operations (price fields only)
+            const bulkOps = rowsToUpdate.map(({ _id, data }) => ({
+              updateOne: {
+                filter: { _id },
+                update: {
+                  $set: {
+                    'inventory.listPrice': data.price,
+                    'inventory.cost': data.groupData.inventory.cost,
+                    'inventory.face_price': data.groupData.inventory.faceValue,
+                    'inventory.taxed_cost': data.groupData.inventory.taxedCost,
+                    'seats': data.groupData.seats.map((seatNumber) => ({
+                      number: seatNumber.toString(),
+                      price: data.price,
+                    })),
+                    'inventory.tickets': data.groupData.inventory.tickets.map((ticket) => ({
+                      id: ticket.id,
+                      seatNumber: ticket.seatNumber,
+                      notes: ticket.notes,
+                      cost: ticket.cost,
+                      faceValue: ticket.faceValue,
+                      taxedCost: ticket.taxedCost,
+                      sellPrice:
+                        typeof ticket?.sellPrice === "number" && !isNaN(ticket?.sellPrice)
+                          ? ticket.sellPrice
+                          : parseFloat(ticket?.cost || ticket?.faceValue || 0),
+                      stockType: ticket.stockType,
+                      eventId: ticket.eventId,
+                      accountId: ticket.accountId,
+                      status: ticket.status,
+                      auditNote: ticket.auditNote,
+                    })),
+                  },
+                },
+              },
+            }));
 
-            // Then delete from external API if we have inventory IDs
-            if (inventoryIdsToUpdate.length > 0) {
+            try {
+              await ConsecutiveGroup.bulkWrite(bulkOps, { session });
+            } catch (error) {
+              console.error(`[ERROR] Event ${eventId} - Failed to bulk update ConsecutiveGroups:`, error.message);
+            }
+
+            // Delta sync to Automatiq — update listings in-place without deleting
+            const deltaSyncItems = rowsToUpdate
+              .filter(({ existingInventoryId }) => existingInventoryId)
+              .map(({ data, existingInventoryId }) => {
+                const group = data.groupData;
+                return {
+                  inventory_id: String(existingInventoryId),
+                  status: 'available',
+                  quantity: group.inventory.quantity,
+                  section: group.section,
+                  row: group.row,
+                  list_price: data.price,
+                  face_price: group.inventory.faceValue,
+                  taxed_cost: group.inventory.taxedCost,
+                  cost: group.inventory.cost,
+                  stock_type: group.inventory.stockType || "MOBILE_TRANSFER",
+                  split_type: group.inventory.splitType || "CUSTOM",
+                  custom_split: group.inventory.customSplit ||
+                    `${Math.ceil(group.inventory.quantity / 2)},${group.inventory.quantity}`,
+                  in_hand: typeof group.inventory.inHand === "boolean" ? group.inventory.inHand : true,
+                  in_hand_date: formattedInHandDate,
+                  instant_transfer: typeof group.inventory.instantTransfer === "boolean" ? group.inventory.instantTransfer : false,
+                  hide_seats: group.inventory.hideSeatNumbers || true,
+                  notes: group.inventory.notes || '',
+                  public_notes: group.inventory.publicNotes || '',
+                  mapping_id,
+                  event_name,
+                  venue_name,
+                  event_date: eventDateObj.toISOString(),
+                  seats: group.seats.map((seatNumber) => ({
+                    number: seatNumber.toString(),
+                    price: data.price,
+                  })),
+                };
+              });
+
+            if (deltaSyncItems.length > 0) {
               try {
-                const apiDeleteResult = await this.inventoryApi.deleteInventoryBatch(inventoryIdsToUpdate);
-                if (LOG_LEVEL >= 3) {
-                  this.logWithTime(
-                    `[Debug SM ${eventId}] External API deletion for updates: ${apiDeleteResult.successful.length} successful, ${apiDeleteResult.failed.length} failed`,
-                    "debug"
-                  );
-                }
-                console.log(`[API DELETE UPDATE ${eventId}] External API: ${apiDeleteResult.successful.length} successful, ${apiDeleteResult.failed.length} failed`);
-              } catch (apiError) {
-                console.error(`[API DELETE UPDATE ERROR ${eventId}] Failed to delete inventories via API:`, apiError.message);
+                const syncResult = await this.inventoryApi.deltaSyncInventory(deltaSyncItems);
+                console.log(`[DELTA SYNC ${eventId}] ${syncResult.successful} updated, ${syncResult.failed} failed (inventory IDs preserved)`);
+              } catch (syncError) {
+                console.error(`[DELTA SYNC ERROR ${eventId}] ${syncError.message}`);
                 if (LOG_LEVEL >= 1) {
                   this.logWithTime(
-                    `[Warning SM ${eventId}] External API deletion for updates failed: ${apiError.message}`,
+                    `[Warning SM ${eventId}] Delta sync failed: ${syncError.message}`,
                     "warning"
                   );
                 }
               }
             }
 
-            // Now prepare new inventory items to insert
-            const newInventoryItems = rowsToUpdate.map(({ data }) => {
-              const group = data.groupData;
-              const eventDateObj =
-                typeof event_date === "string"
-                  ? new Date(event_date)
-                  : event_date;
-              const inHandDateObj = moment(eventDateObj).subtract(1, "day");
-              const formattedInHandDate = inHandDateObj.toISOString();
-              const increasedPrice = data.price;
-
-              return {
-                eventId,
-                mapping_id,
-                event_name,
-                venue_name,
-                event_date: eventDateObj.toISOString(),
-                inHandDate: formattedInHandDate,
-                section: group.section,
-                row: group.row,
-                seatCount: group.inventory.quantity,
-                seatRange: `${Math.min(...group.seats)}-${Math.max(
-                  ...group.seats
-                )}`,
-                seats: group.seats.map((seatNumber) => ({
-                  number: seatNumber.toString(),
-                  inHandDate: formattedInHandDate,
-                  price: increasedPrice,
-                  mapping_id,
-                })),
-                inventory: {
-                  inventoryId: generateUniqueInventoryId(), // Always generate new inventory ID for updates
-                  quantity: group.inventory.quantity,
-                  section: group.section,
-                  hideSeatNumbers: group.inventory.hideSeatNumbers || true,
-                  row: group.row,
-                  cost: group.inventory.cost,
-                  stockType: group.inventory.stockType || "MOBILE_TRANSFER",
-                  lineType: group.inventory.lineType,
-                  seatType: group.inventory.seatType,
-                  inHandDate: formattedInHandDate,
-                  notes: group.inventory.notes,
-                  tags: group.inventory.tags,
-                  offerId: group.inventory.offerId,
-                  splitType: group.inventory.splitType || "CUSTOM",
-                  publicNotes: group.inventory.publicNotes,
-                  listPrice: increasedPrice,
-                  face_price: group.inventory.faceValue,
-                  taxed_cost: group.inventory.taxedCost,
-                  cost: group.inventory.cost,
-                  hide_seats: group.inventory.hideSeatNumbers || true,
-                  in_hand:
-                    typeof group.inventory.inHand === "boolean"
-                      ? group.inventory.inHand
-                      : true,
-                  in_hand_date: formattedInHandDate,
-                  instant_transfer:
-                    typeof group.inventory.instantTransfer === "boolean"
-                      ? group.inventory.instantTransfer
-                      : false,
-                  files_available:
-                    typeof group.inventory.filesAvailable === "boolean"
-                      ? group.inventory.filesAvailable
-                      : false,
-                  customSplit:
-                    group.inventory.customSplit ||
-                    `${Math.ceil(group.inventory.quantity / 2)},${
-                      group.inventory.quantity
-                    }`,
-                  stock_type: group.inventory.stockType || "MOBILE_TRANSFER",
-                  zone: group.inventory.zone,
-                  shown_quantity: group.inventory.shownQuantity,
-                  passthrough: group.inventory.passthrough,
-                  mapping_id,
-                  event_name: event_name,
-                  venue_name: venue_name,
-                  event_date: eventDateObj.toISOString(),
-                  eventId: eventId,
-                  tickets: group.inventory.tickets.map((ticket) => ({
-                    id: ticket.id,
-                    seatNumber: ticket.seatNumber,
-                    notes: ticket.notes,
-                    cost: ticket.cost,
-                    faceValue: ticket.faceValue,
-                    taxedCost: ticket.taxedCost,
-                    sellPrice:
-                      typeof ticket?.sellPrice === "number" &&
-                      !isNaN(ticket?.sellPrice)
-                        ? ticket.sellPrice
-                        : parseFloat(
-                            ticket?.cost || ticket?.faceValue || 0
-                          ),
-                    stockType: ticket.stockType,
-                    eventId: ticket.eventId,
-                    accountId: ticket.accountId,
-                    status: ticket.status,
-                    auditNote: ticket.auditNote,
-                    mapping_id: mapping_id,
-                  })),
-                },
-              };
-            });
-
-            // Insert new inventory items in batches
-            const BATCH_SIZE = 100;
-            for (let i = 0; i < newInventoryItems.length; i += BATCH_SIZE) {
-              const batch = newInventoryItems.slice(i, i + BATCH_SIZE);
-              try {
-                await ConsecutiveGroup.insertMany(batch, { ordered: false, session: session });
-              } catch (error) {
-                console.error(
-                  `[ERROR] Event ${eventId} - Failed to insert updated ConsecutiveGroup batch:`,
-                  error.message
-                );
-              }
-            }
-
             if (LOG_LEVEL >= 2) {
               this.logWithTime(
-                `[Info SM ${eventId}] Updated ${rowsToUpdate.length} rows by delete-and-insert with new inventory IDs.`,
+                `[Info SM ${eventId}] Updated ${rowsToUpdate.length} rows in-place (inventory IDs preserved via delta sync).`,
                 "info"
               );
             }
-            if (LOG_LEVEL >= 3) {
-              this.logWithTime(
-                `[Debug SM ${eventId}] UPDATE operation completed: ${rowsToUpdate.length} rows deleted and re-inserted with new inventory IDs`,
-                "debug"
-              );
-            }
-            // DB UPDATE log already covered by summary above
+            console.log(`[DB UPDATE ${eventId}] ${rowsToUpdate.length} price updates in-place (IDs preserved)`);
           }
 
           // Insert new/updated rows with new inventory IDs

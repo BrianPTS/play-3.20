@@ -80,6 +80,52 @@ class InventoryApi {
       };
     }
   }
+  /**
+   * Delta sync inventory — upserts by inventory_id, preserving existing listings
+   * @param {Array<Object>} customInventories - Array of inventory objects to upsert
+   * @returns {Promise<Object>} API response
+   */
+  async deltaSyncInventory(customInventories) {
+    let lastError;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        console.log(`[DELTA SYNC] Sending ${customInventories.length} inventory updates (attempt ${attempt + 1}/3)...`);
+
+        const response = await axios.post(`${this.baseURL}/inventories/delta_sync`, {
+          custom_inventories: customInventories
+        }, {
+          headers: this.headers,
+          timeout: 30000
+        });
+
+        console.log(`[DELTA SYNC] ✅ ${customInventories.length} inventories synced`, response.status);
+        return {
+          successful: customInventories.length,
+          failed: 0,
+          apiResponse: response.data
+        };
+      } catch (error) {
+        lastError = error;
+        console.error(`[DELTA SYNC] ❌ Attempt ${attempt + 1} failed:`, error.message);
+        if (error.response) {
+          console.error(`[DELTA SYNC] Response:`, error.response.status, error.response.data);
+        }
+
+        if (attempt < 2) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    console.error('[DELTA SYNC] All attempts failed');
+    return {
+      successful: 0,
+      failed: customInventories.length,
+      error: lastError?.message
+    };
+  }
 }
 
 export default InventoryApi;
