@@ -277,6 +277,41 @@ export function CreateConsicutiveSeats(data) {
 
   return mergedData;
 }
+/**
+ * Detect the "pack size" of a TM offer: the quantity the buyer is forced
+ * to purchase in one transaction. Returns null if the offer isn't a pack.
+ *
+ * Examples:
+ *   "2 Pack Special Offer"      → 2
+ *   "Summer's Live 4 Pack"      → 4
+ *   "Me + 3 4-Pack Offer"       → 4
+ *   ticketTypeUnsoldQualifier:  "2PACKHOLD" | "4PACKHOLD" | ...
+ *   sellableQuantities: [4]     → 4  (single-value means "must buy exactly this many")
+ */
+function getPackSize(offer) {
+  if (!offer) return null;
+  const name = offer.name || '';
+
+  // Name-based detection (most reliable — TM labels packs clearly)
+  if (/\bMe\s*\+\s*3\b/i.test(name)) return 4;
+  if (/4[\s-]*pack|four[\s-]*pack/i.test(name)) return 4;
+  if (/3[\s-]*pack|three[\s-]*pack/i.test(name)) return 3;
+  if (/2[\s-]*pack|two[\s-]*pack/i.test(name)) return 2;
+  if (/6[\s-]*pack|six[\s-]*pack/i.test(name)) return 6;
+
+  // ticketTypeUnsoldQualifier code-based detection
+  const q = offer.ticketTypeUnsoldQualifier;
+  if (q === '2PACKHOLD' || q === '222PA1HOLD' || q === '22BOGOHOLD') return 2;
+  if (q === '4PACKHOLD') return 4;
+
+  // sellableQuantities: single value means "buyer must take exactly this many"
+  if (offer.sellableQuantities && offer.sellableQuantities.length === 1) {
+    return offer.sellableQuantities[0];
+  }
+
+  return null;
+}
+
 function getSplitType(arr, offer) {
   var length = arr.length;
 
@@ -287,38 +322,32 @@ function getSplitType(arr, offer) {
     return String(length);
   }
 
-  if (
-    offer &&
-    offer?.ticketTypeUnsoldQualifier &&
-    (offer?.ticketTypeUnsoldQualifier == "2PACKHOLD" ||
-      offer?.ticketTypeUnsoldQualifier == "222PA1HOLD" ||
-      offer?.ticketTypeUnsoldQualifier == "22BOGOHOLD")
-  ) {
-    if (length === 2) {
-      return "2";
-    } else if (length === 4) {
-      return "2,4";
-    } else if (length >= 6) {
-      var numbers = Array.from(
-        { length: length % 2 == 0 ? length : length - 1 },
-        (_, i) => (i % 2 == 0 ? i + 2 : undefined),
-      ).filter((x) => x != undefined);
-      return numbers.join(",");
-    } else return "2";
-  } else {
-    if (length === 2) {
-      return "2";
-    } else if (length === 3) {
-      return "3";
-    } else if (length === 4) {
-      return "2,4";
-    } else if (length >= 5) {
-      var numbers = Array.from({ length: length }, (_, i) => i + 1).filter(
-        (x) => x != 1,
-      );
-      return numbers.join(",");
-    } else return "1";
+  // Pack-based split: if this is an N-pack offer, the only valid purchase
+  // quantities are multiples of N. e.g. 2-pack on 6 seats → "2,4,6",
+  // 4-pack on 8 seats → "4,8", 4-pack on 4 seats → "4".
+  const packSize = getPackSize(offer);
+  if (packSize) {
+    const multiples = [];
+    for (let q = packSize; q <= length; q += packSize) {
+      multiples.push(q);
+    }
+    return multiples.length > 0 ? multiples.join(",") : String(length);
   }
+
+  // Non-pack offers: allow single tickets as long as the buyer doesn't
+  // leave exactly one behind.
+  if (length === 2) {
+    return "2";
+  } else if (length === 3) {
+    return "3";
+  } else if (length === 4) {
+    return "2,4";
+  } else if (length >= 5) {
+    var numbers = Array.from({ length: length }, (_, i) => i + 1).filter(
+      (x) => x != 1,
+    );
+    return numbers.join(",");
+  } else return "1";
 }
 
 function CreateInventoryAndLine(
@@ -464,9 +493,17 @@ function CreateInventoryAndLine(
         // No-split offers: sellableQuantities has only one value (e.g. "must purchase all 4")
         offer?.sellableQuantities?.length === 1
           ? "NOSPLIT"
-          : offer?.inventoryType?.toLowerCase() === "resale"
-            ? "DEFAULT"
-            : "NEVERLEAVEONE",
+          // Pack offers (2 Pack, 4 Pack, Me+3, etc.): if the whole group matches
+          // the pack size, lock as NOSPLIT so buyer must take all. Otherwise
+          // NEVERLEAVEONE — and customSplit (below) will enforce multiples of
+          // the pack size so a buyer can't leave orphan seats.
+          : getPackSize(offer) && data?.seats?.length === getPackSize(offer)
+            ? "NOSPLIT"
+            : getPackSize(offer)
+              ? "NEVERLEAVEONE"
+              : offer?.inventoryType?.toLowerCase() === "resale"
+                ? "DEFAULT"
+                : "NEVERLEAVEONE",
       inventoryTag:
         offer?.inventoryType?.toLowerCase() === "resale" ? "resale" : "standard",
       resaleType:
