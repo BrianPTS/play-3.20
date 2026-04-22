@@ -22,6 +22,8 @@ const GLOBAL_FILTERS = {
     "Standard Admission",
     "Reserved",
     "Reserved Ticket",
+    "Pit",
+    "General Admission Pit",
   ], // e.g., ['obstructed view', 'aisle'] - empty means no filter, strings to check for (case-insensitive)
   accessibility: [
     // Empty array means exclude ALL accessibility seats
