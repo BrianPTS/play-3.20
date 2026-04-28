@@ -850,6 +850,12 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
 
       // fs.writeFileSync("debug/validScrapeResult.json", result);
       const currentTicketCount = validScrapeResult.length;
+      // Sum individual seats across all groups (Available_Seats counts groups,
+      // not seats — seatsForSale gives the true seat-level inventory size).
+      const seatsForSale = validScrapeResult.reduce(
+        (sum, g) => sum + (g.inventory?.quantity || 0),
+        0
+      );
 
         // Quick update of basic info
         await Event.updateOne(
@@ -858,6 +864,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             $set: {
               Available_Seats: currentTicketCount,
               Venue_Capacity: venueCapacity,
+              seatsForSale,
               Availability_Percentage: venueCapacity > 0 ? Math.round(currentTicketCount / venueCapacity * 100) : 0,
               Last_Updated: new Date(), // Ensure Last_Updated is always set to now
               "metadata.lastUpdate": new Date(),
