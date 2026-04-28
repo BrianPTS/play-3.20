@@ -942,5 +942,26 @@ export const AttachRowSection = (
   // Venue capacity = total number of seats in the map API data
   const venueCapacity = allAvailableSeats.length;
 
-  return { listings: finalData, venueCapacity };
+  // Per-section breakdown for dashboard verification.
+  // total comes from the venue map; forSale sums quantities from facets.
+  const sectionTotals = new Map();
+  for (const seat of allAvailableSeats) {
+    const sec = seat.section;
+    if (!sec) continue;
+    sectionTotals.set(sec, (sectionTotals.get(sec) || 0) + 1);
+  }
+  const sectionForSale = new Map();
+  for (const item of finalData) {
+    const sec = item.section;
+    if (!sec) continue;
+    sectionForSale.set(sec, (sectionForSale.get(sec) || 0) + (item.inventory?.quantity || 0));
+  }
+  const allSections = new Set([...sectionTotals.keys(), ...sectionForSale.keys()]);
+  const sectionStats = [...allSections].map(section => ({
+    section,
+    total: sectionTotals.get(section) || 0,
+    forSale: sectionForSale.get(section) || 0,
+  }));
+
+  return { listings: finalData, venueCapacity, sectionStats };
 };

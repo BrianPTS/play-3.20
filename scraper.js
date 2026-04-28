@@ -1022,7 +1022,7 @@ async function callTicketmasterAPI(facetHeader, proxyAgent, eventId, event, mapH
 
     // Handle the case where we have partial data
     try {
-      const { listings: result, venueCapacity } = AttachRowSection(
+      const { listings: result, venueCapacity, sectionStats } = AttachRowSection(
         DataFacets ? GenerateNanoPlaces(DataFacets?.facets) : [],
         DataMap || {},
         DataFacets?._embedded?.offer || [],
@@ -1058,6 +1058,7 @@ async function callTicketmasterAPI(facetHeader, proxyAgent, eventId, event, mapH
 
       // Attach venueCapacity to result array for downstream use
       result.venueCapacity = venueCapacity;
+      result.sectionStats = sectionStats;
       return result;
     } catch (processError) {
       console.error(`Error processing API response for event ${eventId}:`, processError.message);

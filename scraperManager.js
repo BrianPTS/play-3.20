@@ -856,6 +856,10 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
         (sum, g) => sum + (g.inventory?.quantity || 0),
         0
       );
+      // Per-section breakdown comes from seatBatch.js (computed against the
+      // unfiltered finalData + venue map). Used by the dashboard event detail
+      // page for section-level verification.
+      const sectionStats = Array.isArray(scrapeResult.sectionStats) ? scrapeResult.sectionStats : [];
 
         // Quick update of basic info
         await Event.updateOne(
@@ -865,6 +869,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
               Available_Seats: currentTicketCount,
               Venue_Capacity: venueCapacity,
               seatsForSale,
+              sectionStats,
               Availability_Percentage: venueCapacity > 0 ? Math.round(currentTicketCount / venueCapacity * 100) : 0,
               Last_Updated: new Date(), // Ensure Last_Updated is always set to now
               "metadata.lastUpdate": new Date(),
