@@ -942,49 +942,5 @@ export const AttachRowSection = (
   // Venue capacity = total number of seats in the map API data
   const venueCapacity = allAvailableSeats.length;
 
-  // Section Density Filter — exclude sparse sections
-  const sectionDensityThreshold = 0.10; // 10% minimum availability
-  const sectionDensityMinCapacity = 50;  // skip small sections (boxes, suites)
-  const sectionDensityHighValueThreshold = 1000; // $1,000/ticket — never exclude premium
-
-  // Count available seats per section from Facets data (finalData)
-  const sectionAvailableCounts = {};
-  finalData.forEach(item => {
-    const section = item.section;
-    if (!sectionAvailableCounts[section]) sectionAvailableCounts[section] = 0;
-    sectionAvailableCounts[section] += (item.inventory?.quantity || 1);
-  });
-
-  // Count total seats per section from Map API data
-  const sectionTotalCounts = {};
-  allAvailableSeats.forEach(seat => {
-    const section = seat.section;
-    if (!sectionTotalCounts[section]) sectionTotalCounts[section] = 0;
-    sectionTotalCounts[section]++;
-  });
-
-  // Filter out sparse sections
-  const filteredData = finalData.filter(item => {
-    const section = item.section;
-    const totalCapacity = sectionTotalCounts[section] || 0;
-    const availableCount = sectionAvailableCounts[section] || 0;
-
-    // Skip small sections
-    if (totalCapacity < sectionDensityMinCapacity) return true;
-
-    // Never exclude high-value listings
-    const perTicketCost = item.inventory?.cost || 0;
-    if (perTicketCost >= sectionDensityHighValueThreshold) return true;
-
-    // Check density
-    const density = totalCapacity > 0 ? availableCount / totalCapacity : 1;
-    if (density < sectionDensityThreshold) {
-      console.log(`[Density Filter] Excluding section ${section}: ${availableCount}/${totalCapacity} (${(density * 100).toFixed(1)}%) below ${sectionDensityThreshold * 100}% threshold`);
-      return false;
-    }
-
-    return true;
-  });
-
-  return { listings: filteredData, venueCapacity };
+  return { listings: finalData, venueCapacity };
 };
