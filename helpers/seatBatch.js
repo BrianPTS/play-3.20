@@ -774,8 +774,10 @@ export const AttachRowSection = (
       }
 
       // New Global Filtering Logic: Item must match at least one active global filter category.
-      // Hard denylist — drop offers whose name/description matches an
-      // excluded term, regardless of inventoryType / other keep checks.
+      // Hard denylist — drop offers whose name/description/attributes/
+      // description-doc text matches an excluded term. Case-insensitive
+      // substring match. Runs before any keep logic so it overrides the
+      // inventoryType/description whitelist.
       // List comes from SchedulerSettings (live, editable from dashboard);
       // falls back to GLOBAL_FILTERS.excludedDescriptions if not yet loaded.
       {
@@ -783,9 +785,21 @@ export const AttachRowSection = (
         if (denyList.length > 0 && offerGet) {
           const nLower = (offerGet.name || '').toLowerCase();
           const dLower = (offerGet.description || '').toLowerCase();
+          const attrLower = Array.isArray(x.attributes) ? x.attributes.join(' ').toLowerCase() : '';
+          let descDocLower = '';
+          if (x.descriptionId && descriptions) {
+            const dDoc = descriptions.find((d) => d.descriptionId === x.descriptionId);
+            if (dDoc && Array.isArray(dDoc.descriptions)) {
+              descDocLower = dDoc.descriptions.join(' ').toLowerCase();
+            }
+          }
           const denyHit = denyList.some(term => {
-            const t = (term || '').toLowerCase();
-            return t.length > 0 && (nLower.includes(t) || dLower.includes(t));
+            const t = (term || '').trim().toLowerCase();
+            if (!t) return false;
+            return nLower.includes(t)
+              || dLower.includes(t)
+              || attrLower.includes(t)
+              || descDocLower.includes(t);
           });
           if (denyHit) return undefined;
         }
