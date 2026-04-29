@@ -25,6 +25,12 @@ const GLOBAL_FILTERS = {
     "Pit",
     "General Admission Pit",
   ], // e.g., ['obstructed view', 'aisle'] - empty means no filter, strings to check for (case-insensitive)
+  // Hard denylist: any offer whose name OR description contains one of these
+  // terms is dropped, even if it would otherwise pass the other filters.
+  // Used to block promo offers that aren't real sellable inventory for us.
+  excludedDescriptions: [
+    "Summer of Live Promotion",
+  ],
   accessibility: [
     // Empty array means exclude ALL accessibility seats
   ], // e.g., ['wheelchair', 'hearing'] - empty means no filter, strings to check for (case-insensitive)
@@ -757,6 +763,18 @@ export const AttachRowSection = (
       }
 
       // New Global Filtering Logic: Item must match at least one active global filter category.
+      // Hard denylist — drop offers whose name/description matches an
+      // excluded term, regardless of inventoryType / other keep checks.
+      if (GLOBAL_FILTERS.excludedDescriptions.length > 0 && offerGet) {
+        const nLower = (offerGet.name || '').toLowerCase();
+        const dLower = (offerGet.description || '').toLowerCase();
+        const denyHit = GLOBAL_FILTERS.excludedDescriptions.some(term => {
+          const t = term.toLowerCase();
+          return nLower.includes(t) || dLower.includes(t);
+        });
+        if (denyHit) return undefined;
+      }
+
       let keepItemBasedOnGlobalFilters = false;
       const inventoryFilterActive = GLOBAL_FILTERS.inventoryType.length > 0;
       const descriptionFilterActive = GLOBAL_FILTERS.description.length > 0;
@@ -911,6 +929,17 @@ export const AttachRowSection = (
     // Apply same offer filters as regular seats
     if (offerGet.name == "Special Offers") return;
     if (offerGet?.protected == true) return;
+
+    // Hard denylist — drop offers whose name/description matches an excluded term
+    if (GLOBAL_FILTERS.excludedDescriptions.length > 0) {
+      const nLower = (offerGet.name || '').toLowerCase();
+      const dLower = (offerGet.description || '').toLowerCase();
+      const denyHit = GLOBAL_FILTERS.excludedDescriptions.some(term => {
+        const t = term.toLowerCase();
+        return nLower.includes(t) || dLower.includes(t);
+      });
+      if (denyHit) return;
+    }
 
     // Apply accessibility filter
     if (GLOBAL_FILTERS.excludeAccessibility && ga.accessibility && ga.accessibility.length > 0) return;
