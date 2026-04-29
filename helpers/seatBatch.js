@@ -37,6 +37,17 @@ const GLOBAL_FILTERS = {
   excludeAccessibility: true, // Set to true to exclude ALL accessibility seats
   excludeWheelchair: true, // Set to true to exclude wheelchair accessible seats (sections containing 'WC')
 };
+
+// Runtime override for excludedDescriptions, populated by scraperManager from
+// SchedulerSettings.descriptionExclusions on every scheduler tick. When null,
+// the static GLOBAL_FILTERS.excludedDescriptions list is used as a fallback.
+let _runtimeExcludedDescriptions = null;
+export function setRuntimeExcludedDescriptions(list) {
+  _runtimeExcludedDescriptions = Array.isArray(list) ? list : null;
+}
+export function getActiveExcludedDescriptions() {
+  return _runtimeExcludedDescriptions ?? GLOBAL_FILTERS.excludedDescriptions;
+}
 //it will break map into seats
 function GetMapSeats(data) {
   let seatArray = [];
@@ -765,14 +776,19 @@ export const AttachRowSection = (
       // New Global Filtering Logic: Item must match at least one active global filter category.
       // Hard denylist — drop offers whose name/description matches an
       // excluded term, regardless of inventoryType / other keep checks.
-      if (GLOBAL_FILTERS.excludedDescriptions.length > 0 && offerGet) {
-        const nLower = (offerGet.name || '').toLowerCase();
-        const dLower = (offerGet.description || '').toLowerCase();
-        const denyHit = GLOBAL_FILTERS.excludedDescriptions.some(term => {
-          const t = term.toLowerCase();
-          return nLower.includes(t) || dLower.includes(t);
-        });
-        if (denyHit) return undefined;
+      // List comes from SchedulerSettings (live, editable from dashboard);
+      // falls back to GLOBAL_FILTERS.excludedDescriptions if not yet loaded.
+      {
+        const denyList = getActiveExcludedDescriptions();
+        if (denyList.length > 0 && offerGet) {
+          const nLower = (offerGet.name || '').toLowerCase();
+          const dLower = (offerGet.description || '').toLowerCase();
+          const denyHit = denyList.some(term => {
+            const t = (term || '').toLowerCase();
+            return t.length > 0 && (nLower.includes(t) || dLower.includes(t));
+          });
+          if (denyHit) return undefined;
+        }
       }
 
       let keepItemBasedOnGlobalFilters = false;

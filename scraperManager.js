@@ -1,7 +1,8 @@
 import moment from "moment";
 import { setTimeout } from "timers/promises";
-import { Event, ErrorLog, ConsecutiveGroup } from "./models/index.js";
+import { Event, ErrorLog, ConsecutiveGroup, SchedulerSettings } from "./models/index.js";
 import { ScrapeEvent, refreshHeaders, generateEnhancedHeaders } from "./scraper.js";
+import { setRuntimeExcludedDescriptions } from "./helpers/seatBatch.js";
 import * as fs from "fs";
 import path from "path";
 import ProxyManager from "./helpers/ProxyManager.js";
@@ -323,6 +324,20 @@ export class ScraperManager {
           this.logWithTime(`DB→Redis sync error: ${err.message}`, "warning");
         }
       }, 15000);
+
+      // Refresh description-exclusion denylist from SchedulerSettings.
+      // Edited from the scrape dashboard; pulled every 60s so changes
+      // take effect on the next scheduler tick without a restart.
+      const refreshDescriptionExclusions = async () => {
+        try {
+          const s = await SchedulerSettings.findOne({}, { descriptionExclusions: 1 }).lean();
+          setRuntimeExcludedDescriptions(s?.descriptionExclusions || []);
+        } catch (err) {
+          this.logWithTime(`descriptionExclusions refresh error: ${err.message}`, "warning");
+        }
+      };
+      await refreshDescriptionExclusions();
+      setInterval(refreshDescriptionExclusions, 60000);
 
       // Retry queue cleanup removed
 
