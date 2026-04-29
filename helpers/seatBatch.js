@@ -930,17 +930,6 @@ export const AttachRowSection = (
     if (offerGet.name == "Special Offers") return;
     if (offerGet?.protected == true) return;
 
-    // Hard denylist — drop offers whose name/description matches an excluded term
-    if (GLOBAL_FILTERS.excludedDescriptions.length > 0) {
-      const nLower = (offerGet.name || '').toLowerCase();
-      const dLower = (offerGet.description || '').toLowerCase();
-      const denyHit = GLOBAL_FILTERS.excludedDescriptions.some(term => {
-        const t = term.toLowerCase();
-        return nLower.includes(t) || dLower.includes(t);
-      });
-      if (denyHit) return;
-    }
-
     // Apply accessibility filter
     if (GLOBAL_FILTERS.excludeAccessibility && ga.accessibility && ga.accessibility.length > 0) return;
 
