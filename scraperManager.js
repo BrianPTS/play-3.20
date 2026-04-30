@@ -1009,6 +1009,11 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
      
 
         // ── Discord alert accumulators ──
+        // First scrape (no existing data) is the baseline — skip alerts so we
+        // don't flood with every initial listing. After that, inserts and price
+        // changes are naturally de-duped: the DB updates on each iteration, so
+        // the same change never triggers twice.
+        const _isBaseline = existingRowMap.size === 0;
         const _priceDrops = [];
         const _newStandardSeats = [];
 
@@ -1085,17 +1090,19 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
         for (const [rowKey, newData] of newRowMap) {
           if (!existingRowMap.has(rowKey)) {
             rowsToInsert.push({ rowKey, data: newData });
-            // Track new standard seats for Discord alerts
-            const tag = newData.groupData?.inventory?.inventoryTag
-              ?? (newData.groupData?.inventory?.splitType === 'NEVERLEAVEONE' ? 'standard' : 'resale');
-            if (tag === 'standard') {
-              _newStandardSeats.push({
-                section: newData.groupData?.section || '',
-                row: newData.groupData?.row || '',
-                quantity: newData.quantity || 0,
-                price: parseFloat(newData.groupData?.inventory?.listPrice || 0),
-                seats: newData.groupData?.seats || [],
-              });
+            // Track new standard seats for Discord alerts (skip baseline)
+            if (!_isBaseline) {
+              const tag = newData.groupData?.inventory?.inventoryTag
+                ?? (newData.groupData?.inventory?.splitType === 'NEVERLEAVEONE' ? 'standard' : 'resale');
+              if (tag === 'standard') {
+                _newStandardSeats.push({
+                  section: newData.groupData?.section || '',
+                  row: newData.groupData?.row || '',
+                  quantity: newData.quantity || 0,
+                  price: parseFloat(newData.groupData?.inventory?.listPrice || 0),
+                  seats: newData.groupData?.seats || [],
+                });
+              }
             }
           }
         }
