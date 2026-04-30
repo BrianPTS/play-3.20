@@ -3,6 +3,7 @@ import { setTimeout } from "timers/promises";
 import { Event, ErrorLog, ConsecutiveGroup, SchedulerSettings } from "./models/index.js";
 import { ScrapeEvent, refreshHeaders, generateEnhancedHeaders } from "./scraper.js";
 import { setRuntimeExcludedOfferNames } from "./helpers/seatBatch.js";
+import { sendInventoryAlert } from "./helpers/discordNotifier.js";
 import * as fs from "fs";
 import path from "path";
 import ProxyManager from "./helpers/ProxyManager.js";
@@ -912,6 +913,8 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
               "inventory.quantity": 1,
               "inventory.inventoryId": 1,
               "inventory.offerId": 1,
+              "inventory.inventoryTag": 1,
+              "inventory.splitType": 1,
             }
           ).session(session).read('primary'); // Force read from primary for fresh data
 
@@ -947,6 +950,8 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             quantity: group.inventory?.quantity,
             inventoryId: group.inventory?.inventoryId,
             offerId: group.inventory?.offerId,
+            inventoryTag: group.inventory?.inventoryTag
+              ?? (group.inventory?.splitType === 'NEVERLEAVEONE' ? 'standard' : 'resale'),
           });
         });
 
@@ -1003,6 +1008,10 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
 
      
 
+        // ── Discord alert accumulators ──
+        const _priceDrops = [];
+        const _newStandardSeats = [];
+
         // Identify rows to delete or update
         for (const [rowKey, existingData] of existingRowMap) {
           const newData = newRowMap.get(rowKey);
@@ -1043,6 +1052,20 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             // Only generate new inventory IDs for truly new inventory or deleted/re-added rows
             newData.groupData.inventory.inventoryId = existingData.inventoryId;
 
+            // Detect price drops for Discord alerts (both standard and resale)
+            if (priceChanged && newPrice < existingPrice) {
+              const tag = newData.groupData?.inventory?.inventoryTag
+                ?? (newData.groupData?.inventory?.splitType === 'NEVERLEAVEONE' ? 'standard' : 'resale');
+              _priceDrops.push({
+                section: existingData.section,
+                row: existingData.row,
+                quantity: newData.quantity,
+                oldPrice: existingPrice,
+                newPrice,
+                inventoryTag: tag,
+              });
+            }
+
             // Any change on a matching rowKey → in-place update with delta_sync
             // to preserve the inventory ID on Automatiq.
              if (seatsChanged || quantityChanged || priceChanged) {
@@ -1061,6 +1084,17 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
         for (const [rowKey, newData] of newRowMap) {
           if (!existingRowMap.has(rowKey)) {
             rowsToInsert.push({ rowKey, data: newData });
+            // Track new standard seats for Discord alerts
+            const tag = newData.groupData?.inventory?.inventoryTag
+              ?? (newData.groupData?.inventory?.splitType === 'NEVERLEAVEONE' ? 'standard' : 'resale');
+            if (tag === 'standard') {
+              _newStandardSeats.push({
+                section: newData.groupData?.section || '',
+                row: newData.groupData?.row || '',
+                quantity: newData.quantity || 0,
+                price: parseFloat(newData.groupData?.inventory?.listPrice || 0),
+              });
+            }
           }
         }
 
@@ -1439,6 +1473,17 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             }
             console.log(`[DB INSERT ${eventId}] Added ${groupsToInsert.length} new rows to database`);
           }
+        }
+
+        // ── Fire Discord alert (non-blocking) ──
+        if (_priceDrops.length > 0 || _newStandardSeats.length > 0) {
+          sendInventoryAlert({
+            eventName: event_name,
+            venue: venue_name,
+            eventId,
+            newStandardSeats: _newStandardSeats,
+            priceDrops: _priceDrops,
+          }).catch(err => console.error(`[Discord] alert error: ${err.message}`));
         }
       }
 
