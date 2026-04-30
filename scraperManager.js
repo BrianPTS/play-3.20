@@ -1063,6 +1063,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
                 oldPrice: existingPrice,
                 newPrice,
                 inventoryTag: tag,
+                seats: existingData.seats || [],
               });
             }
 
@@ -1093,6 +1094,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
                 row: newData.groupData?.row || '',
                 quantity: newData.quantity || 0,
                 price: parseFloat(newData.groupData?.inventory?.listPrice || 0),
+                seats: newData.groupData?.seats || [],
               });
             }
           }
@@ -1481,6 +1483,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             eventName: event_name,
             venue: venue_name,
             eventId,
+            eventDate: event_date,
             newStandardSeats: _newStandardSeats,
             priceDrops: _priceDrops,
           }).catch(err => console.error(`[Discord] alert error: ${err.message}`));
