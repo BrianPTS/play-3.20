@@ -1016,6 +1016,17 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
         const _isBaseline = existingRowMap.size === 0;
         const _priceDrops = [];
         const _newStandardSeats = [];
+        const _resaleUndercuts = [];
+
+        // Build section → cheapest price map from existing data for undercut detection
+        const _sectionMinPrice = new Map();
+        for (const [, data] of existingRowMap) {
+          const sec = data.section;
+          const p = parseFloat(data.price) || 0;
+          if (p > 0 && (!_sectionMinPrice.has(sec) || p < _sectionMinPrice.get(sec))) {
+            _sectionMinPrice.set(sec, p);
+          }
+        }
 
         // Identify rows to delete or update
         for (const [rowKey, existingData] of existingRowMap) {
@@ -1094,14 +1105,30 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             if (!_isBaseline) {
               const tag = newData.groupData?.inventory?.inventoryTag
                 ?? (newData.groupData?.inventory?.splitType === 'NEVERLEAVEONE' ? 'standard' : 'resale');
+              const sec = newData.groupData?.section || '';
+              const listPrice = parseFloat(newData.groupData?.inventory?.listPrice || 0);
               if (tag === 'standard') {
                 _newStandardSeats.push({
-                  section: newData.groupData?.section || '',
+                  section: sec,
                   row: newData.groupData?.row || '',
                   quantity: newData.quantity || 0,
-                  price: parseFloat(newData.groupData?.inventory?.listPrice || 0),
+                  price: listPrice,
                   seats: newData.groupData?.seats || [],
                 });
+              }
+              // Resale undercut: new resale listing ≥30% below cheapest in same section
+              if (tag === 'resale' && listPrice > 0 && _sectionMinPrice.has(sec)) {
+                const sectionMin = _sectionMinPrice.get(sec);
+                if (listPrice <= sectionMin * 0.70) {
+                  _resaleUndercuts.push({
+                    section: sec,
+                    row: newData.groupData?.row || '',
+                    quantity: newData.quantity || 0,
+                    price: listPrice,
+                    sectionCheapest: sectionMin,
+                    seats: newData.groupData?.seats || [],
+                  });
+                }
               }
             }
           }
@@ -1485,7 +1512,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
         }
 
         // ── Fire Discord alert (non-blocking) ──
-        if (_priceDrops.length > 0 || _newStandardSeats.length > 0) {
+        if (_priceDrops.length > 0 || _newStandardSeats.length > 0 || _resaleUndercuts.length > 0) {
           sendInventoryAlert({
             eventName: event_name,
             venue: venue_name,
@@ -1493,6 +1520,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             eventDate: event_date,
             newStandardSeats: _newStandardSeats,
             priceDrops: _priceDrops,
+            resaleUndercuts: _resaleUndercuts,
           }).catch(err => console.error(`[Discord] alert error: ${err.message}`));
         }
       }

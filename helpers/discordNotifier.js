@@ -11,12 +11,13 @@
 
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-export async function sendInventoryAlert({ eventName, venue, eventId, eventDate, newStandardSeats, priceDrops }) {
+export async function sendInventoryAlert({ eventName, venue, eventId, eventDate, newStandardSeats, priceDrops, resaleUndercuts }) {
   if (!WEBHOOK_URL) return;
 
   const hasNew = newStandardSeats && newStandardSeats.length > 0;
   const hasDrops = priceDrops && priceDrops.length > 0;
-  if (!hasNew && !hasDrops) return;
+  const hasUndercuts = resaleUndercuts && resaleUndercuts.length > 0;
+  if (!hasNew && !hasDrops && !hasUndercuts) return;
 
   const embeds = [];
 
@@ -60,6 +61,22 @@ export async function sendInventoryAlert({ eventName, venue, eventId, eventDate,
       title: `🔴 ${priceDrops.length} Price Drop${priceDrops.length > 1 ? 's' : ''}`,
       description: lines.join('\n'),
       color: 0xe11d48,
+      footer: { text: footerText },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  if (hasUndercuts) {
+    const lines = resaleUndercuts.slice(0, 15).map(u => {
+      const pct = Math.round((1 - u.price / u.sectionCheapest) * 100);
+      return `**${u.section}** Row ${u.row}${fmtSeats(u.seats)} · ${u.quantity} seat${u.quantity > 1 ? 's' : ''} · **$${u.price.toFixed(2)}** vs section low $${u.sectionCheapest.toFixed(2)} (−${pct}%)`;
+    });
+    if (resaleUndercuts.length > 15) lines.push(`_...and ${resaleUndercuts.length - 15} more_`);
+
+    embeds.push({
+      title: `🟡 ${resaleUndercuts.length} Resale Undercut${resaleUndercuts.length > 1 ? 's' : ''} (≥30% below section)`,
+      description: lines.join('\n'),
+      color: 0xf59e0b,
       footer: { text: footerText },
       timestamp: new Date().toISOString(),
     });
