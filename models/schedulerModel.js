@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 // fields it actually consumes during scraping. The scrape dashboard owns
 // the full schema and writes; play just reads.
 const schedulerSettingsSchema = new mongoose.Schema({
-  descriptionExclusions: {
+  offerNameExclusions: {
     type: [String],
     default: [],
   },

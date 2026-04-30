@@ -28,7 +28,7 @@ const GLOBAL_FILTERS = {
   // Hard denylist: any offer whose name OR description contains one of these
   // terms is dropped, even if it would otherwise pass the other filters.
   // Used to block promo offers that aren't real sellable inventory for us.
-  excludedDescriptions: [
+  excludedOfferNames: [
     "Summer of Live Promotion",
   ],
   accessibility: [
@@ -41,12 +41,12 @@ const GLOBAL_FILTERS = {
 // Runtime override for excludedDescriptions, populated by scraperManager from
 // SchedulerSettings.descriptionExclusions on every scheduler tick. When null,
 // the static GLOBAL_FILTERS.excludedDescriptions list is used as a fallback.
-let _runtimeExcludedDescriptions = null;
-export function setRuntimeExcludedDescriptions(list) {
-  _runtimeExcludedDescriptions = Array.isArray(list) ? list : null;
+let _runtimeExcludedOfferNames = null;
+export function setRuntimeExcludedOfferNames(list) {
+  _runtimeExcludedOfferNames = Array.isArray(list) ? list : null;
 }
-export function getActiveExcludedDescriptions() {
-  return _runtimeExcludedDescriptions ?? GLOBAL_FILTERS.excludedDescriptions;
+export function getActiveExcludedOfferNames() {
+  return _runtimeExcludedOfferNames ?? GLOBAL_FILTERS.excludedOfferNames;
 }
 //it will break map into seats
 function GetMapSeats(data) {
@@ -774,32 +774,17 @@ export const AttachRowSection = (
       }
 
       // New Global Filtering Logic: Item must match at least one active global filter category.
-      // Hard denylist — drop offers whose name/description/attributes/
-      // description-doc text matches an excluded term. Case-insensitive
-      // substring match. Runs before any keep logic so it overrides the
-      // inventoryType/description whitelist.
+      // Offer-name denylist — drop offers whose name contains an excluded
+      // term (case-insensitive substring). Runs before any keep logic.
       // List comes from SchedulerSettings (live, editable from dashboard);
-      // falls back to GLOBAL_FILTERS.excludedDescriptions if not yet loaded.
+      // falls back to GLOBAL_FILTERS.excludedOfferNames if not yet loaded.
       {
-        const denyList = getActiveExcludedDescriptions();
+        const denyList = getActiveExcludedOfferNames();
         if (denyList.length > 0 && offerGet) {
-          const nLower = (offerGet.name || '').toLowerCase();
-          const dLower = (offerGet.description || '').toLowerCase();
-          const attrLower = Array.isArray(x.attributes) ? x.attributes.join(' ').toLowerCase() : '';
-          let descDocLower = '';
-          if (x.descriptionId && descriptions) {
-            const dDoc = descriptions.find((d) => d.descriptionId === x.descriptionId);
-            if (dDoc && Array.isArray(dDoc.descriptions)) {
-              descDocLower = dDoc.descriptions.join(' ').toLowerCase();
-            }
-          }
+          const nameLower = (offerGet.name || '').toLowerCase();
           const denyHit = denyList.some(term => {
             const t = (term || '').trim().toLowerCase();
-            if (!t) return false;
-            return nLower.includes(t)
-              || dLower.includes(t)
-              || attrLower.includes(t)
-              || descDocLower.includes(t);
+            return t.length > 0 && nameLower.includes(t);
           });
           if (denyHit) return undefined;
         }

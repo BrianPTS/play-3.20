@@ -2,7 +2,7 @@ import moment from "moment";
 import { setTimeout } from "timers/promises";
 import { Event, ErrorLog, ConsecutiveGroup, SchedulerSettings } from "./models/index.js";
 import { ScrapeEvent, refreshHeaders, generateEnhancedHeaders } from "./scraper.js";
-import { setRuntimeExcludedDescriptions } from "./helpers/seatBatch.js";
+import { setRuntimeExcludedOfferNames } from "./helpers/seatBatch.js";
 import * as fs from "fs";
 import path from "path";
 import ProxyManager from "./helpers/ProxyManager.js";
@@ -328,16 +328,16 @@ export class ScraperManager {
       // Refresh description-exclusion denylist from SchedulerSettings.
       // Edited from the scrape dashboard; pulled every 60s so changes
       // take effect on the next scheduler tick without a restart.
-      const refreshDescriptionExclusions = async () => {
+      const refreshOfferNameExclusions = async () => {
         try {
-          const s = await SchedulerSettings.findOne({}, { descriptionExclusions: 1 }).lean();
-          setRuntimeExcludedDescriptions(s?.descriptionExclusions || []);
+          const s = await SchedulerSettings.findOne({}, { offerNameExclusions: 1 }).lean();
+          setRuntimeExcludedOfferNames(s?.offerNameExclusions || []);
         } catch (err) {
-          this.logWithTime(`descriptionExclusions refresh error: ${err.message}`, "warning");
+          this.logWithTime(`offerNameExclusions refresh error: ${err.message}`, "warning");
         }
       };
-      await refreshDescriptionExclusions();
-      setInterval(refreshDescriptionExclusions, 60000);
+      await refreshOfferNameExclusions();
+      setInterval(refreshOfferNameExclusions, 60000);
 
       // Retry queue cleanup removed
 
