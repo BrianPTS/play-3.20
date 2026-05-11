@@ -4,6 +4,7 @@ import { Event, ErrorLog, ConsecutiveGroup, SchedulerSettings } from "./models/i
 import { ScrapeEvent, refreshHeaders, generateEnhancedHeaders } from "./scraper.js";
 import { setRuntimeExcludedOfferNames } from "./helpers/seatBatch.js";
 import { sendInventoryAlert } from "./helpers/discordNotifier.js";
+import { logToSheets } from "./helpers/sheetsLogger.js";
 import * as fs from "fs";
 import path from "path";
 import ProxyManager from "./helpers/ProxyManager.js";
@@ -1522,6 +1523,17 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
             priceDrops: _priceDrops,
             resaleUndercuts: _resaleUndercuts,
           }).catch(err => console.error(`[Discord] alert error: ${err.message}`));
+
+          // ── Log to Google Sheets (non-blocking, append-only) ──
+          logToSheets({
+            eventName: event_name,
+            venue: venue_name,
+            eventId,
+            eventDate: event_date,
+            newStandardSeats: _newStandardSeats,
+            priceDrops: _priceDrops,
+            resaleUndercuts: _resaleUndercuts,
+          }).catch(err => console.error(`[Sheets] log error: ${err.message}`));
         }
       }
 
