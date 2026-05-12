@@ -8,6 +8,7 @@ import { devices } from "patchright";
 import proxyArray from "./helpers/proxy.js";
 import { AttachRowSection } from "./helpers/seatBatch.js";
 import GenerateNanoPlaces from "./helpers/seats.js";
+import { classifyResaleListings, getClassificationSummary } from "./helpers/resaleClassifier.js";
 import crypto from "crypto";
 import { BrowserFingerprint } from "./browserFingerprint.js";
 import pThrottle from 'p-throttle';
@@ -1020,6 +1021,15 @@ async function callTicketmasterAPI(facetHeader, proxyAgent, eventId, event, mapH
     
     // Both APIs successful — proceed with data processing
 
+    // Classify resale listings as fan (verified_resale) vs broker (3rd_party_resale)
+    const resaleClassification = DataFacets?.facets
+      ? classifyResaleListings(DataFacets.facets)
+      : new Map();
+    if (resaleClassification.size > 0) {
+      const summary = getClassificationSummary(resaleClassification);
+      console.log(`[ResaleClassifier] Event ${eventId}: ${summary.fan} fan, ${summary.broker} broker, ${summary.total} total resale`);
+    }
+
     // Handle the case where we have partial data
     try {
       const { listings: result, venueCapacity, sectionStats } = AttachRowSection(
@@ -1027,7 +1037,8 @@ async function callTicketmasterAPI(facetHeader, proxyAgent, eventId, event, mapH
         DataMap || {},
         DataFacets?._embedded?.offer || [],
         { eventId, inHandDate: event?.inHandDate },
-        DataFacets?._embedded?.description || {}
+        DataFacets?._embedded?.description || {},
+        resaleClassification
       );
 
       // Validate result - null or empty results should not be considered successful scrape
