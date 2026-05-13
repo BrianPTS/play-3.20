@@ -1,11 +1,14 @@
 /**
  * Google Sheets alert logger.
  *
- * Appends one row per listing to a Google Sheet via a Google Apps Script
- * web app. Append-only — never reads, modifies, or deletes existing rows.
+ * Sends alerts to a Google Apps Script web app that expects:
+ *   { alerts: [{ at, type, eventName, venue, eventDate, eventUrl,
+ *                section, row, seats, seatCount, tag,
+ *                oldPrice, newPrice, price, sectionLow,
+ *                dropPct, undercutPct }] }
  *
- * Requires GOOGLE_SHEETS_SCRIPT_URL env var (Apps Script deployment URL).
- * Silently no-ops if not set.
+ * Append-only — never reads, modifies, or deletes existing rows.
+ * Requires GOOGLE_SHEETS_SCRIPT_URL env var. No-ops if not set.
  */
 
 const SHEETS_URL = process.env.GOOGLE_SHEETS_SCRIPT_URL;
@@ -14,11 +17,6 @@ function extractArtist(name) {
   if (!name) return '';
   const m = name.match(/^(.+?)\s+[-–—]\s+|^(.+?):\s+|^(.+?)\s+at\s+/i);
   return (m && (m[1] || m[2] || m[3])?.trim()) || name;
-}
-
-function computeDaysOut(eventDate) {
-  if (!eventDate) return '';
-  return Math.round((new Date(eventDate) - new Date()) / 86400000);
 }
 
 function fmtSeats(seats) {
@@ -35,46 +33,92 @@ export async function logToSheets({ eventName, venue, eventId, eventDate, newSta
   if (!hasNew && !hasDrops && !hasUndercuts) return;
 
   const ts = new Date().toISOString();
-  const artist = extractArtist(eventName);
-  const daysOut = computeDaysOut(eventDate);
   const evDate = eventDate ? new Date(eventDate).toISOString().slice(0, 10) : '';
+  const evUrl = eventId ? `https://www.ticketmaster.com/event/${eventId}` : '';
 
-  const rows = [];
+  const alerts = [];
 
   if (hasNew) {
     for (const s of newStandardSeats) {
-      rows.push([
-        ts, 'new_standard', artist, eventName, venue || '', evDate, daysOut, eventId || '',
-        s.section, s.row, fmtSeats(s.seats), s.quantity, s.price, '', '', 'standard',
-      ]);
+      alerts.push({
+        at: ts,
+        type: 'new_standard',
+        eventName: eventName || '',
+        venue: venue || '',
+        eventDate: evDate,
+        eventUrl: evUrl,
+        section: s.section || '',
+        row: s.row || '',
+        seats: fmtSeats(s.seats),
+        seatCount: s.quantity || 0,
+        tag: 'standard',
+        oldPrice: '',
+        newPrice: '',
+        price: s.price || 0,
+        sectionLow: '',
+        dropPct: '',
+        undercutPct: '',
+      });
     }
   }
 
   if (hasDrops) {
     for (const d of priceDrops) {
-      rows.push([
-        ts, 'price_drop', artist, eventName, venue || '', evDate, daysOut, eventId || '',
-        d.section, d.row, fmtSeats(d.seats), d.quantity, d.newPrice, d.oldPrice, '', d.inventoryTag || '',
-      ]);
+      const pct = d.oldPrice > 0 ? Math.round((1 - d.newPrice / d.oldPrice) * 100) : 0;
+      alerts.push({
+        at: ts,
+        type: 'price_drop',
+        eventName: eventName || '',
+        venue: venue || '',
+        eventDate: evDate,
+        eventUrl: evUrl,
+        section: d.section || '',
+        row: d.row || '',
+        seats: fmtSeats(d.seats),
+        seatCount: d.quantity || 0,
+        tag: d.inventoryTag || '',
+        oldPrice: d.oldPrice || 0,
+        newPrice: d.newPrice || 0,
+        price: '',
+        sectionLow: '',
+        dropPct: pct,
+        undercutPct: '',
+      });
     }
   }
 
   if (hasUndercuts) {
     for (const u of resaleUndercuts) {
-      rows.push([
-        ts, 'resale_undercut', artist, eventName, venue || '', evDate, daysOut, eventId || '',
-        u.section, u.row, fmtSeats(u.seats), u.quantity, u.price, '', u.sectionCheapest, 'resale',
-      ]);
+      const pct = u.sectionCheapest > 0 ? Math.round((1 - u.price / u.sectionCheapest) * 100) : 0;
+      alerts.push({
+        at: ts,
+        type: 'resale_undercut',
+        eventName: eventName || '',
+        venue: venue || '',
+        eventDate: evDate,
+        eventUrl: evUrl,
+        section: u.section || '',
+        row: u.row || '',
+        seats: fmtSeats(u.seats),
+        seatCount: u.quantity || 0,
+        tag: 'resale',
+        oldPrice: '',
+        newPrice: '',
+        price: u.price || 0,
+        sectionLow: u.sectionCheapest || 0,
+        dropPct: '',
+        undercutPct: pct,
+      });
     }
   }
 
-  if (rows.length === 0) return;
+  if (alerts.length === 0) return;
 
   try {
     const res = await fetch(SHEETS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows }),
+      body: JSON.stringify({ alerts }),
     });
     if (!res.ok) {
       console.error(`[Sheets] POST failed: ${res.status} ${res.statusText}`);
