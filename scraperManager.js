@@ -2543,7 +2543,7 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
       // Redis may be stale if the frontend wrote directly to MongoDB.
       const eventDoc = await Event.findOne(
         { Event_ID: eventId },
-        { Skip_Scraping: 1, source: 1, URL: 1 }
+        { Skip_Scraping: 1, source: 1, URL: 1, additionalEventIds: 1 }
       ).lean();
       if (!eventDoc || eventDoc.Skip_Scraping) {
         this.logWithTime(
@@ -2652,6 +2652,66 @@ async updateEventMetadata(eventId, scrapeResult, venueCapacity = 0) {
       if (Array.isArray(result) && result.length === 0) {
         // Empty results should be treated as failures
         throw new Error("Event returned empty results - treating as failed");
+      }
+
+      // ── Multi-URL merge: scrape additional TM event IDs and combine ──
+      if (eventDoc.additionalEventIds && eventDoc.additionalEventIds.length > 0) {
+        for (const extra of eventDoc.additionalEventIds) {
+          try {
+            const extraEvent = {
+              eventId: extra.eventId,
+              headers: null,
+              sessionId: `pool-${extra.eventId}-${Date.now()}`,
+              proxyId: proxy?.proxy || "default",
+              processingStart: Date.now(),
+              naturalBehavior: true,
+            };
+            const extraResult = await this.throttledScrapeEvent(extraEvent, proxyAgent, proxy);
+            if (Array.isArray(extraResult) && extraResult.length > 0) {
+              // Deduplicate: build set of existing rowKeys, skip duplicates from additional
+              const existingKeys = new Set(result.map(g => {
+                const seats = (g.seats || []).map(s => typeof s === 'object' ? String(s.number) : String(s)).sort();
+                const range = seats.length > 0 ? `${seats[0]}-${seats[seats.length - 1]}` : 'no-seats';
+                return `${g.section}-${g.row}-${range}`;
+              }));
+              let added = 0;
+              for (const group of extraResult) {
+                const seats = (group.seats || []).map(s => typeof s === 'object' ? String(s.number) : String(s)).sort();
+                const range = seats.length > 0 ? `${seats[0]}-${seats[seats.length - 1]}` : 'no-seats';
+                const key = `${group.section}-${group.row}-${range}`;
+                if (!existingKeys.has(key)) {
+                  result.push(group);
+                  existingKeys.add(key);
+                  added++;
+                }
+              }
+              // Merge venue capacity (take the larger value)
+              if (extraResult.venueCapacity && extraResult.venueCapacity > (result.venueCapacity || 0)) {
+                result.venueCapacity = extraResult.venueCapacity;
+              }
+              // Merge sectionStats
+              if (Array.isArray(extraResult.sectionStats)) {
+                const existingStats = result.sectionStats || [];
+                const statSections = new Set(existingStats.map(s => s.section));
+                for (const stat of extraResult.sectionStats) {
+                  if (!statSections.has(stat.section)) {
+                    existingStats.push(stat);
+                  } else {
+                    const existing = existingStats.find(s => s.section === stat.section);
+                    if (existing) {
+                      existing.forSale = (existing.forSale || 0) + (stat.forSale || 0);
+                      existing.total = Math.max(existing.total || 0, stat.total || 0);
+                    }
+                  }
+                }
+                result.sectionStats = existingStats;
+              }
+              console.log(`[MultiURL ${eventId}] Merged ${added} listings from additional event ${extra.eventId} (${extra.label || 'no label'})`);
+            }
+          } catch (extraErr) {
+            console.warn(`[MultiURL ${eventId}] Failed to scrape additional event ${extra.eventId}: ${extraErr.message}`);
+          }
+        }
       }
 
       // Update metadata and tracking (sets eventUpdateTimestamps + eventLastProcessedTime internally)
